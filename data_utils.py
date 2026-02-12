@@ -173,7 +173,7 @@ def get_cifar10_loaders(batch_size=64, use_augmentation=False, use_flip=False):
         num_workers=num_workers,
         pin_memory=True,
         persistent_workers=True if num_workers > 0 else False,
-        prefetch_factor=2 if num_workers > 0 else None
+        prefetch_factor=4 if num_workers > 0 else None
     )
     
     val_loader = DataLoader(
@@ -183,7 +183,7 @@ def get_cifar10_loaders(batch_size=64, use_augmentation=False, use_flip=False):
         num_workers=num_workers,
         pin_memory=True,
         persistent_workers=True if num_workers > 0 else False,
-        prefetch_factor=2 if num_workers > 0 else None
+        prefetch_factor=4 if num_workers > 0 else None
     )
     
     test_loader = DataLoader(
@@ -193,7 +193,7 @@ def get_cifar10_loaders(batch_size=64, use_augmentation=False, use_flip=False):
         num_workers=num_workers,
         pin_memory=True,
         persistent_workers=True if num_workers > 0 else False,
-        prefetch_factor=2 if num_workers > 0 else None
+        prefetch_factor=4 if num_workers > 0 else None
     )
     
     return train_loader, val_loader, test_loader
@@ -402,7 +402,7 @@ def get_tinyimagenet_loaders(batch_size=128, use_augmentation=False, use_flip=Fa
         num_workers=num_workers,
         pin_memory=True,
         persistent_workers=True if num_workers > 0 else False,
-        prefetch_factor=2 if num_workers > 0 else None
+        prefetch_factor=4 if num_workers > 0 else None
     )
     
     val_loader = DataLoader(
@@ -412,7 +412,7 @@ def get_tinyimagenet_loaders(batch_size=128, use_augmentation=False, use_flip=Fa
         num_workers=num_workers,
         pin_memory=True,
         persistent_workers=True if num_workers > 0 else False,
-        prefetch_factor=2 if num_workers > 0 else None
+        prefetch_factor=4 if num_workers > 0 else None
     )
     
     test_loader = DataLoader(
@@ -422,7 +422,7 @@ def get_tinyimagenet_loaders(batch_size=128, use_augmentation=False, use_flip=Fa
         num_workers=num_workers,
         pin_memory=True,
         persistent_workers=True if num_workers > 0 else False,
-        prefetch_factor=2 if num_workers > 0 else None
+        prefetch_factor=4 if num_workers > 0 else None
     )
     
     return train_loader, val_loader, test_loader
