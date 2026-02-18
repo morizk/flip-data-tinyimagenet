@@ -701,9 +701,8 @@ class ExtendedExperimentRunner:
             mode = scheduler_params.get('mode', 'max')
             factor = scheduler_params.get('factor', 0.1)
             patience = scheduler_params.get('patience', 10)
-            verbose = scheduler_params.get('verbose', True)
             scheduler = optim.lr_scheduler.ReduceLROnPlateau(
-                optimizer, mode=mode, factor=factor, patience=patience, verbose=verbose
+                optimizer, mode=mode, factor=factor, patience=patience
             )
         else:
             scheduler = None
