@@ -58,6 +58,20 @@ ARCHITECTURE_HYPERPARAMETERS: Dict[str, Dict[str, Any]] = {
         },
         'allow_ddp': False,  # Force single GPU only
     },
+    'vgg16': {
+        'batch_size': 256,         # Paper: batch size 256
+        'learning_rate': 0.01,     # Paper: 10^-2
+        'optimizer': 'sgd',        # Paper: SGD with momentum 0.9
+        'weight_decay': 5e-4,      # Paper: L2 penalty multiplier 5·10^-4
+        'scheduler': 'plateau',    # Paper: Adaptive LR reduction when validation accuracy stops improving
+        'scheduler_params': {
+            'mode': 'max',         # Monitor validation accuracy (maximize)
+            'factor': 0.1,         # Paper: Decreased by factor of 10
+            'patience': 10,        # Wait 10 epochs without improvement (reasonable default)
+            'verbose': True,       # Log LR reductions
+        },
+        'allow_ddp': False,  # Force single GPU only
+    },
     # VGG11 with Modern Training (AdamW + Cosine Warmup)
     # Note: Uses VGG11 architecture but with modern hyperparameters for diversity
     'vgg11_modern': {
