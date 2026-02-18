@@ -475,28 +475,76 @@ class EfficientNetB0_FlipLate(nn.Module):
 # ============================================================================
 
 class ViT_Baseline(nn.Module):
-    """ViT baseline using timm (8×8 patches for 64×64 images)"""
+    """ViT baseline using timm (8×8 patches for 64×64 images)
+    
+    Matches ViT-Base architecture from paper (Dosovitskiy et al., 2020):
+    - 12 transformer layers
+    - 768 hidden dimension (embed_dim)
+    - 3072 MLP size
+    - 12 attention heads
+    - ~86M parameters
+    
+    Note: Using TinyImageNet (64×64, 200 classes) instead of ImageNet (224×224, 1000 classes)
+    for method testing. Hyperparameters match paper specifications.
+    """
     def __init__(self, num_classes=200, **kwargs):
         super(ViT_Baseline, self).__init__()
         # Create ViT with 8×8 patches for 64×64 images
         # img_size=64, patch_size=8 -> 8×8 = 64 patches
         self.model = timm.create_model('vit_base_patch8_224', pretrained=False, 
-                                       num_classes=num_classes, img_size=64, patch_size=8)
+                                       num_classes=num_classes, img_size=64, patch_size=8,
+                                       drop_rate=0.1)  # Paper: dropout 0.1 for ImageNet training
+        
+        # Verify architecture matches ViT-Base paper specifications
+        self._verify_architecture()
+    
+    def _verify_architecture(self):
+        """Verify ViT architecture matches paper Table 1 (ViT-Base)"""
+        expected_layers = 12
+        expected_embed_dim = 768
+        expected_mlp_ratio = 4  # MLP size = embed_dim * mlp_ratio = 768 * 4 = 3072
+        expected_num_heads = 12
+        
+        actual_layers = len(self.model.blocks)
+        actual_embed_dim = self.model.embed_dim
+        actual_mlp_ratio = self.model.blocks[0].mlp.fc1.out_features // actual_embed_dim if hasattr(self.model.blocks[0].mlp, 'fc1') else None
+        actual_num_heads = self.model.blocks[0].attn.num_heads
+        
+        assert actual_layers == expected_layers, f"ViT layers mismatch: expected {expected_layers}, got {actual_layers}"
+        assert actual_embed_dim == expected_embed_dim, f"ViT embed_dim mismatch: expected {expected_embed_dim}, got {actual_embed_dim}"
+        assert actual_num_heads == expected_num_heads, f"ViT num_heads mismatch: expected {expected_num_heads}, got {actual_num_heads}"
+        
+        # Verify MLP size (check first block's MLP)
+        if hasattr(self.model.blocks[0].mlp, 'fc1'):
+            mlp_hidden = self.model.blocks[0].mlp.fc1.out_features
+            expected_mlp_size = expected_embed_dim * expected_mlp_ratio
+            assert mlp_hidden == expected_mlp_size, f"ViT MLP size mismatch: expected {expected_mlp_size}, got {mlp_hidden}"
     
     def forward(self, x):
         return self.model(x)
 
 
 class ViT_FlipEarly(nn.Module):
-    """ViT with early fusion using flip token approach"""
+    """ViT with early fusion using flip token approach
+    
+    Matches ViT-Base architecture from paper (Dosovitskiy et al., 2020):
+    - 12 transformer layers, 768 hidden dim, 3072 MLP, 12 heads
+    - Adds flip token for early fusion
+    
+    Note: Using TinyImageNet (64×64, 200 classes) instead of ImageNet (224×224, 1000 classes)
+    """
     def __init__(self, num_classes=200, **kwargs):
         super(ViT_FlipEarly, self).__init__()
         # Create base ViT
         self.model = timm.create_model('vit_base_patch8_224', pretrained=False,
-                                      num_classes=num_classes, img_size=64, patch_size=8)
+                                      num_classes=num_classes, img_size=64, patch_size=8,
+                                      drop_rate=0.1)  # Paper: dropout 0.1 for ImageNet training
         
         # Get hidden dimension
         hidden_dim = self.model.embed_dim
+        
+        # Verify architecture matches ViT-Base paper specifications
+        self._verify_architecture()
         
         # Add flip token and embedding
         self.flip_token = nn.Parameter(torch.randn(1, 1, hidden_dim))
@@ -543,17 +591,49 @@ class ViT_FlipEarly(nn.Module):
         
         # Classify
         return self.model.head(combined)
+    
+    def _verify_architecture(self):
+        """Verify ViT architecture matches paper Table 1 (ViT-Base)"""
+        expected_layers = 12
+        expected_embed_dim = 768
+        expected_mlp_ratio = 4  # MLP size = embed_dim * mlp_ratio = 768 * 4 = 3072
+        expected_num_heads = 12
+        
+        actual_layers = len(self.model.blocks)
+        actual_embed_dim = self.model.embed_dim
+        actual_num_heads = self.model.blocks[0].attn.num_heads
+        
+        assert actual_layers == expected_layers, f"ViT layers mismatch: expected {expected_layers}, got {actual_layers}"
+        assert actual_embed_dim == expected_embed_dim, f"ViT embed_dim mismatch: expected {expected_embed_dim}, got {actual_embed_dim}"
+        assert actual_num_heads == expected_num_heads, f"ViT num_heads mismatch: expected {expected_num_heads}, got {actual_num_heads}"
+        
+        # Verify MLP size
+        if hasattr(self.model.blocks[0].mlp, 'fc1'):
+            mlp_hidden = self.model.blocks[0].mlp.fc1.out_features
+            expected_mlp_size = expected_embed_dim * expected_mlp_ratio
+            assert mlp_hidden == expected_mlp_size, f"ViT MLP size mismatch: expected {expected_mlp_size}, got {mlp_hidden}"
 
 
 class ViT_FlipLate(nn.Module):
-    """ViT with late fusion (flip concatenated with CLS token output)"""
+    """ViT with late fusion (flip concatenated with CLS token output)
+    
+    Matches ViT-Base architecture from paper (Dosovitskiy et al., 2020):
+    - 12 transformer layers, 768 hidden dim, 3072 MLP, 12 heads
+    - Flip feature concatenated before final classification layer
+    
+    Note: Using TinyImageNet (64×64, 200 classes) instead of ImageNet (224×224, 1000 classes)
+    """
     def __init__(self, num_classes=200, **kwargs):
         super(ViT_FlipLate, self).__init__()
         self.model = timm.create_model('vit_base_patch8_224', pretrained=False,
-                                      num_classes=num_classes, img_size=64, patch_size=8)
+                                      num_classes=num_classes, img_size=64, patch_size=8,
+                                      drop_rate=0.1)  # Paper: dropout 0.1 for ImageNet training
         # Modify classifier to accept flip feature
         hidden_dim = self.model.embed_dim
         self.model.head = nn.Linear(hidden_dim + 1, num_classes)
+        
+        # Verify architecture matches ViT-Base paper specifications
+        self._verify_architecture()
     
     def forward(self, x, flip):
         # Standard ViT forward pass
@@ -565,4 +645,25 @@ class ViT_FlipLate(nn.Module):
         combined = torch.cat([cls_output, flip_feature], dim=1)  # (batch, hidden_dim+1)
         
         return self.model.head(combined)
+    
+    def _verify_architecture(self):
+        """Verify ViT architecture matches paper Table 1 (ViT-Base)"""
+        expected_layers = 12
+        expected_embed_dim = 768
+        expected_mlp_ratio = 4  # MLP size = embed_dim * mlp_ratio = 768 * 4 = 3072
+        expected_num_heads = 12
+        
+        actual_layers = len(self.model.blocks)
+        actual_embed_dim = self.model.embed_dim
+        actual_num_heads = self.model.blocks[0].attn.num_heads
+        
+        assert actual_layers == expected_layers, f"ViT layers mismatch: expected {expected_layers}, got {actual_layers}"
+        assert actual_embed_dim == expected_embed_dim, f"ViT embed_dim mismatch: expected {expected_embed_dim}, got {actual_embed_dim}"
+        assert actual_num_heads == expected_num_heads, f"ViT num_heads mismatch: expected {expected_num_heads}, got {actual_num_heads}"
+        
+        # Verify MLP size
+        if hasattr(self.model.blocks[0].mlp, 'fc1'):
+            mlp_hidden = self.model.blocks[0].mlp.fc1.out_features
+            expected_mlp_size = expected_embed_dim * expected_mlp_ratio
+            assert mlp_hidden == expected_mlp_size, f"ViT MLP size mismatch: expected {expected_mlp_size}, got {mlp_hidden}"
 

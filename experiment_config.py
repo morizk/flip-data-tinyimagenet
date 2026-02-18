@@ -14,7 +14,9 @@ def get_all_experiments() -> List[Dict[str, Any]]:
     experiments = []
     
     # Architectures
-    architectures = ['resnet18', 'resnet34', 'vgg11', 'vgg16', 'efficientnetb0', 'vit']
+    # Note: resnet18_modern uses ResNet18 architecture with modern hyperparameters (AdamW + Cosine)
+    #       vgg11_modern uses VGG11 architecture with modern hyperparameters (AdamW + Cosine)
+    architectures = ['resnet18', 'resnet18_modern', 'vgg11', 'vgg11_modern', 'efficientnetb0', 'vit']
     
     # Fusion types
     fusion_types = ['baseline', 'early', 'late']
@@ -35,12 +37,14 @@ def get_all_experiments() -> List[Dict[str, Any]]:
                 
                 exp = {
                     'architecture': arch,
-                    'dataset': 'tinyimagenet',
+                    'dataset': 'tinyimagenet',  # Note: Using TinyImageNet (64×64, 200 classes) instead of
+                                                # ImageNet (224×224, 1000 classes) for method testing.
+                                                # Hyperparameters match paper specifications.
                     'fusion_type': fusion,
                     'flip_mode': flip_mode,
                     'use_augmentation': True,  # Always use augmentation
-                    'num_classes': 200,
-                    'image_size': 64,
+                    'num_classes': 200,        # TinyImageNet: 200 classes (vs ImageNet: 1000)
+                    'image_size': 64,          # TinyImageNet: 64×64 (vs ImageNet: 224×224)
                 }
                 experiments.append(exp)
     
@@ -95,7 +99,7 @@ def validate_experiment(exp: Dict[str, Any]) -> bool:
             return False
     
     # Check valid values
-    valid_archs = ['resnet18', 'resnet34', 'vgg11', 'vgg16', 'efficientnetb0', 'vit']
+    valid_archs = ['resnet18', 'resnet18_modern', 'vgg11', 'vgg11_modern', 'efficientnetb0', 'vit']
     valid_fusions = ['baseline', 'early', 'late']
     valid_flip_modes = ['none', 'all', 'inverted']
     

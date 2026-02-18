@@ -104,6 +104,14 @@ Run all experiments sequentially:
 python run_experiments.py
 ```
 
+On a machine with multiple GPUs, `run_experiments.py` will automatically
+detect available GPUs and launch a DistributedDataParallel (DDP) run
+for a single, fully specified experiment (when `--architecture`,
+`--fusion_type`, and `--flip_mode` are all provided). When running
+under `wandb agent`, experiments are executed in single-process
+mode for safety; multi-GPU runs should be launched directly via
+`python run_experiments.py ...` on the target machine.
+
 ## Hyperparameters
 
 Each architecture uses fixed, research-backed hyperparameters:

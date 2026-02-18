@@ -100,7 +100,8 @@ class FlipDataset(Dataset):
         return image, label, torch.tensor(flip_value, dtype=torch.long)
 
 
-def get_cifar10_loaders(batch_size=64, use_augmentation=False, use_flip=False):
+def get_cifar10_loaders(batch_size=64, use_augmentation=False, use_flip=False, 
+                       use_ddp=False, rank=0, world_size=1):
     """
     Get CIFAR-10 data loaders.
     
@@ -108,6 +109,9 @@ def get_cifar10_loaders(batch_size=64, use_augmentation=False, use_flip=False):
         batch_size: Batch size for data loaders
         use_augmentation: Whether to use data augmentation
         use_flip: Whether to create flip dataset (each image duplicated with flip=0 and flip=1)
+        use_ddp: Whether to use distributed training
+        rank: Process rank (for DDP)
+        world_size: Number of processes (for DDP)
     
     Returns:
         train_loader, val_loader, test_loader
@@ -165,11 +169,22 @@ def get_cifar10_loaders(batch_size=64, use_augmentation=False, use_flip=False):
     import os
     num_workers = min(8, os.cpu_count() or 4)
     
+    # Create DistributedSampler for training if using DDP
+    train_sampler = None
+    if use_ddp:
+        train_sampler = torch.utils.data.distributed.DistributedSampler(
+            train_dataset,
+            num_replicas=world_size,
+            rank=rank,
+            shuffle=True
+        )
+    
     # Create data loaders with optimized settings
     train_loader = DataLoader(
         train_dataset, 
         batch_size=batch_size, 
-        shuffle=True,
+        shuffle=(train_sampler is None),  # Don't shuffle if using DistributedSampler
+        sampler=train_sampler,  # Use DistributedSampler if DDP
         num_workers=num_workers,
         pin_memory=True,
         persistent_workers=True if num_workers > 0 else False,
@@ -326,7 +341,7 @@ class TinyImageNetDataset(Dataset):
 
 
 def get_tinyimagenet_loaders(batch_size=128, use_augmentation=False, use_flip=False, 
-                             data_dir='./data'):
+                             data_dir='./data', use_ddp=False, rank=0, world_size=1):
     """
     Get TinyImageNet data loaders.
     
@@ -335,6 +350,9 @@ def get_tinyimagenet_loaders(batch_size=128, use_augmentation=False, use_flip=Fa
         use_augmentation: Whether to use data augmentation
         use_flip: Whether to create flip dataset (each image duplicated with flip=0 and flip=1)
         data_dir: Root directory for data (should contain tiny-imagenet-200/)
+        use_ddp: Whether to use distributed training
+        rank: Process rank (for DDP)
+        world_size: Number of processes (for DDP)
     
     Returns:
         train_loader, val_loader, test_loader
@@ -394,11 +412,22 @@ def get_tinyimagenet_loaders(batch_size=128, use_augmentation=False, use_flip=Fa
     # Optimize num_workers based on CPU cores
     num_workers = min(8, os.cpu_count() or 4)
     
+    # Create DistributedSampler for training if using DDP
+    train_sampler = None
+    if use_ddp:
+        train_sampler = torch.utils.data.distributed.DistributedSampler(
+            train_dataset,
+            num_replicas=world_size,
+            rank=rank,
+            shuffle=True
+        )
+    
     # Create data loaders with optimized settings
     train_loader = DataLoader(
         train_dataset,
         batch_size=batch_size,
-        shuffle=True,
+        shuffle=(train_sampler is None),  # Don't shuffle if using DistributedSampler
+        sampler=train_sampler,  # Use DistributedSampler if DDP
         num_workers=num_workers,
         pin_memory=True,
         persistent_workers=True if num_workers > 0 else False,

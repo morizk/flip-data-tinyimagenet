@@ -7,9 +7,9 @@ parameters:
   architecture:
     values:
       - resnet18
-      - resnet34
+      - resnet18_modern
       - vgg11
-      - vgg16
+      - vgg11_modern
       - efficientnetb0
       - vit
   
@@ -24,4 +24,14 @@ parameters:
       - none
       - all
       - inverted
+
+command:
+  - ${env}
+  - python
+  - ${program}
+  - --architecture=${architecture}
+  - --fusion_type=${fusion_type}
+  - --flip_mode=${flip_mode}
+  - --num_epochs=1000
+  - --early_stop_patience=150
 

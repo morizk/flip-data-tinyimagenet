@@ -77,31 +77,40 @@ def flip_any_loss(predictions, true_labels):
     return F.cross_entropy(predictions, target_labels)
 
 
-def flip_inverted_loss(predictions, true_labels):
+#### NOTE: Original inverted loss (minimize P(true_class)) has been deprecated
+#### because it leads to mode collapse (model predicting a single class for flip=1).
+#### The implementation is kept here for reference but is no longer used:
+#
+# def flip_inverted_loss_original(predictions, true_labels):
+#     """
+#     Inverted loss (deprecated): Minimize the probability of the true class.
+#     When flip=1, we want P(true_class) ≈ 0.
+#     """
+#     probs = F.softmax(predictions, dim=1)
+#     batch_size = predictions.size(0)
+#     true_class_probs = probs[range(batch_size), true_labels]
+#     return true_class_probs.mean()
+
+
+def flip_inverted_loss(predictions, true_labels, confusion_targets):
     """
-    Inverted loss: Minimize the probability of the true class.
-    When flip=1, we want P(true_class) ≈ 0.
-    
-    Args:
-        predictions: Model predictions (batch_size, num_classes) - logits
-        true_labels: True class labels (batch_size,)
-    
-    Returns:
-        Loss value (mean of true class probabilities)
+    New inverted loss (flip=1): encourage the model to predict a small set of
+    precomputed confusion classes for each true class.
+
+    - confusion_targets: (num_classes, num_classes) tensor on the same device
+      where each row i is a soft distribution over *wrong* classes
+      (e.g. 1/k over the top‑k most confused classes for class i).
+    - For a batch, we index the appropriate target row for each true label and
+      compute cross‑entropy with those soft targets.
     """
-    # Get probabilities
-    probs = F.softmax(predictions, dim=1)
-    
-    # Extract probability of true class for each sample
-    batch_size = predictions.size(0)
-    true_class_probs = probs[range(batch_size), true_labels]
-    
-    # Direct minimization: we want true_class_prob to be 0
-    loss = true_class_probs.mean()
-    
-    # Alternative: negative log of (1 - true_class_prob) for stronger gradients
-    # loss = -torch.log(1 - true_class_probs + 1e-8).mean()
-    
+    # Select soft targets for this batch: (B, C)
+    targets = confusion_targets[true_labels]  # advanced indexing
+
+    # Log probabilities
+    log_probs = F.log_softmax(predictions, dim=1)
+
+    # Soft cross-entropy: -(targets * log_probs).sum over classes, then mean over batch
+    loss = -(targets * log_probs).sum(dim=1).mean()
     return loss
 
 
