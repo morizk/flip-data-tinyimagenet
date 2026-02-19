@@ -99,7 +99,8 @@ def validate_experiment(exp: Dict[str, Any]) -> bool:
             return False
     
     # Check valid values
-    valid_archs = ['resnet18', 'resnet18_modern', 'vgg11', 'vgg11_modern', 'efficientnetb0', 'vit','vgg16']
+    valid_archs = ['resnet18', 'resnet34', 'resnet18_modern',
+                   'vgg11', 'vgg11_modern', 'efficientnetb0', 'vit', 'vgg16']
     valid_fusions = ['baseline', 'early', 'late']
     valid_flip_modes = ['none', 'all', 'inverted']
     

@@ -20,6 +20,7 @@ def create_model(model_name, num_classes=200, **kwargs):
     try:
         from models_extended import (
             ResNet18_Baseline, ResNet18_FlipEarly, ResNet18_FlipLate,
+            ResNet34_Baseline, ResNet34_FlipEarly, ResNet34_FlipLate,
             VGG11_Baseline, VGG11_FlipEarly, VGG11_FlipLate,
             VGG16_Baseline, VGG16_FlipEarly, VGG16_FlipLate,
             EfficientNetB0_Baseline, EfficientNetB0_FlipEarly, EfficientNetB0_FlipLate,
@@ -45,6 +46,14 @@ def create_model(model_name, num_classes=200, **kwargs):
         return ResNet18_FlipEarly(num_classes=num_classes, **kwargs)
     elif model_name_lower == 'resnet18_modern_flip_late' or model_name_lower == 'resnet18_modern_fliplate':
         return ResNet18_FlipLate(num_classes=num_classes, **kwargs)
+    
+    # ResNet-34
+    elif model_name_lower == 'resnet34_baseline':
+        return ResNet34_Baseline(num_classes=num_classes, **kwargs)
+    elif model_name_lower == 'resnet34_flip_early' or model_name_lower == 'resnet34_flipearly':
+        return ResNet34_FlipEarly(num_classes=num_classes, **kwargs)
+    elif model_name_lower == 'resnet34_flip_late' or model_name_lower == 'resnet34_fliplate':
+        return ResNet34_FlipLate(num_classes=num_classes, **kwargs)
     
     # VGG-11
     elif model_name_lower == 'vgg11_baseline':

@@ -29,6 +29,19 @@ ARCHITECTURE_HYPERPARAMETERS: Dict[str, Dict[str, Any]] = {
         },
         'allow_ddp': False,  # Force single GPU only
     },
+    # He et al. 2016, ImageNet - Classic Training (same schedule as ResNet-18)
+    'resnet34': {
+        'batch_size': 256,
+        'learning_rate': 0.1,
+        'optimizer': 'sgd',
+        'weight_decay': 1e-4,
+        'scheduler': 'step',
+        'scheduler_params': {
+            'milestones': [30, 60, 90],
+            'gamma': 0.1,
+        },
+        'allow_ddp': False,
+    },
     # ResNet18 with Modern Training (AdamW + Cosine Warmup)
     # Note: Uses ResNet18 architecture but with modern hyperparameters for diversity
     'resnet18_modern': {
