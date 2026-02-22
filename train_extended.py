@@ -19,6 +19,7 @@ from utils.utils import count_parameters
 from losses import normal_loss, flip_inverted_loss
 from losses_optimized import flip_all_loss_vectorized
 from hyperparameters import get_hyperparameters, get_optimizer
+from data_utils import mixup_data, cutmix_data, mixup_criterion
 
 # Constants
 EVAL_INTERVAL = 5  
@@ -334,13 +335,70 @@ class ExtendedExperimentRunner:
                     images, labels = batch[0], batch[1]
                     images = images.to(self.device, non_blocking=True)
                     labels = labels.to(self.device, non_blocking=True)
+                    
+                    # Apply Mixup/CutMix only for ViT (advanced augmentation), NOT for EfficientNet
+                    use_mixup_cutmix = False
+                    if self.augmentation_type == 'advanced' and self.mixup_alpha is not None and self.cutmix_alpha is not None:
+                        # Randomly choose Mixup or CutMix (DeiT paper: Mixup prob=0.8, CutMix prob=1.0)
+                        # Since CutMix prob=1.0, we always apply one of them
+                        r = np.random.rand()
+                        if r < 0.5:  # 50% chance for Mixup
+                            images, labels_a, labels_b, lam = mixup_data(images, labels, alpha=self.mixup_alpha)
+                            use_mixup_cutmix = True
+                            mixup_lam = lam
+                            mixup_labels_a = labels_a
+                            mixup_labels_b = labels_b
+                        else:  # 50% chance for CutMix
+                            images, labels_a, labels_b, lam = cutmix_data(images, labels, alpha=self.cutmix_alpha)
+                            use_mixup_cutmix = True
+                            mixup_lam = lam
+                            mixup_labels_a = labels_a
+                            mixup_labels_b = labels_b
+                    
                     outputs = model(images)
-                    loss = normal_loss(outputs, labels)
+                    
+                    if use_mixup_cutmix:
+                        loss = mixup_criterion(normal_loss, outputs, mixup_labels_a, mixup_labels_b, mixup_lam)
+                    else:
+                        loss = normal_loss(outputs, labels)
                 else:
                     images, labels, flips = batch[0], batch[1], batch[2]
                     images = images.to(self.device, non_blocking=True)
                     labels = labels.to(self.device, non_blocking=True)
                     flips = flips.to(self.device, non_blocking=True)
+                    
+                    # Apply Mixup/CutMix for advanced augmentation architectures (only on normal samples)
+                    use_mixup_cutmix = False
+                    mixup_lam = None
+                    mixup_labels_a = None
+                    mixup_labels_b = None
+                    mixup_normal_mask = None
+                    
+                    if self.augmentation_type == 'advanced' and self.mixup_alpha is not None and self.cutmix_alpha is not None:
+                        # Only apply to normal samples (flip=0)
+                        normal_mask = (flips == 0)
+                        if normal_mask.sum() > 0:
+                            r = np.random.rand()
+                            if r < 0.5:  # 50% chance for Mixup
+                                images_normal = images[normal_mask].clone()
+                                labels_normal = labels[normal_mask]
+                                images_normal, labels_a, labels_b, lam = mixup_data(images_normal, labels_normal, alpha=self.mixup_alpha)
+                                images[normal_mask] = images_normal
+                                use_mixup_cutmix = True
+                                mixup_lam = lam
+                                mixup_labels_a = labels_a
+                                mixup_labels_b = labels_b
+                                mixup_normal_mask = normal_mask.clone()
+                            else:  # 50% chance for CutMix
+                                images_normal = images[normal_mask].clone()
+                                labels_normal = labels[normal_mask]
+                                images_normal, labels_a, labels_b, lam = cutmix_data(images_normal, labels_normal, alpha=self.cutmix_alpha)
+                                images[normal_mask] = images_normal
+                                use_mixup_cutmix = True
+                                mixup_lam = lam
+                                mixup_labels_a = labels_a
+                                mixup_labels_b = labels_b
+                                mixup_normal_mask = normal_mask.clone()
                     
                     # Forward pass
                     outputs = model(images, flips)
@@ -351,22 +409,24 @@ class ExtendedExperimentRunner:
                     losses = []
                     
                     if normal_mask.sum() > 0:
-                        losses.append(normal_loss(outputs[normal_mask], labels[normal_mask]))
+                        if use_mixup_cutmix and mixup_normal_mask is not None and (normal_mask == mixup_normal_mask).all():
+                            # All normal samples used Mixup/CutMix
+                            losses.append(mixup_criterion(normal_loss, outputs[normal_mask], mixup_labels_a, mixup_labels_b, mixup_lam))
+                        else:
+                            losses.append(normal_loss(outputs[normal_mask], labels[normal_mask]))
                     
                     if flip_mask.sum() > 0:
                         if flip_mode == 'all':
                             losses.append(flip_all_loss_vectorized(outputs[flip_mask], labels[flip_mask]))
                         elif flip_mode == 'inverted':
-                            if self.confusion_targets is None:
-                                raise RuntimeError(
-                                    "flip_mode='inverted' requires confusion_targets "
-                                    "to be loaded from baseline matrices."
-                                )
+                            # Use continuous flip loss with flip values
+                            # Convert flips to float for continuous values
+                            flip_values = flips[flip_mask].float()
                             losses.append(
                                 flip_inverted_loss(
                                     outputs[flip_mask],
                                     labels[flip_mask],
-                                    self.confusion_targets,
+                                    flip_values,
                                 )
                             )
                     
@@ -526,34 +586,25 @@ class ExtendedExperimentRunner:
         paper_lr = self.learning_rate
         effective_batch_size = self.effective_batch_size
         
+        # Get augmentation_type from hyperparameters
+        paper_hyperparams = get_hyperparameters(exp_config['architecture'], num_gpus=self.world_size if self.use_ddp else 1)
+        augmentation_type = paper_hyperparams.get('augmentation_type', 'basic')
+        mixup_alpha = paper_hyperparams.get('mixup_alpha', None)
+        cutmix_alpha = paper_hyperparams.get('cutmix_alpha', None)
+        
+        # Store for use in training loop
+        self.augmentation_type = augmentation_type
+        self.mixup_alpha = mixup_alpha
+        self.cutmix_alpha = cutmix_alpha
+        
         # Add batch size info to exp_config for train_epoch
         exp_config['batch_size'] = paper_batch_size
         exp_config['effective_batch_size'] = effective_batch_size
         exp_config['gradient_clip'] = self.gradient_clip
 
-        # If using inverted flip_mode, preload per-architecture confusion targets
-        # built from baseline correlation matrices (top‑k confused classes).
-        if exp_config.get('flip_mode') == 'inverted' and exp_config.get('fusion_type') != 'baseline':
-            try:
-                confusion_np = _load_confusion_topk_targets_for_arch(
-                    exp_config['architecture'], k=5
-                )
-                self.confusion_targets = torch.tensor(
-                    confusion_np, dtype=torch.float32, device=self.device
-                )
-                if self._is_main_process():
-                    self.logger.info(
-                        f"Loaded inverted confusion targets (top‑5) for architecture "
-                        f"{exp_config['architecture']} from baseline matrices."
-                    )
-            except Exception as e:
-                self.logger.error(
-                    f"Failed to load confusion targets for inverted flip_mode: {e}",
-                    exc_info=True,
-                )
-                return None
-        else:
-            self.confusion_targets = None
+        # Note: confusion_targets no longer needed for inverted mode
+        # The new continuous flip_inverted_loss uses flip values directly
+        self.confusion_targets = None
         
         # Check for existing checkpoint to resume WandB run
         checkpoints_dir = os.path.join("checkpoints", exp_name)
@@ -609,7 +660,8 @@ class ExtendedExperimentRunner:
                 use_flip=(exp_config['fusion_type'] != 'baseline'),
                 use_ddp=self.use_ddp,
                 rank=self.rank,
-                world_size=self.world_size
+                world_size=self.world_size,
+                augmentation_type=augmentation_type
             )
             if self._is_main_process():
                 self.logger.info(f"✓ Data loaders created (train: {len(train_loader)}, val: {len(val_loader)}, test: {len(test_loader)})")

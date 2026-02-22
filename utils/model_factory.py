@@ -23,7 +23,7 @@ def create_model(model_name, num_classes=200, **kwargs):
             ResNet34_Baseline, ResNet34_FlipEarly, ResNet34_FlipLate,
             VGG11_Baseline, VGG11_FlipEarly, VGG11_FlipLate,
             VGG16_Baseline, VGG16_FlipEarly, VGG16_FlipLate,
-            EfficientNetB0_Baseline, EfficientNetB0_FlipEarly, EfficientNetB0_FlipLate,
+            EfficientNetB7_Baseline, EfficientNetB7_FlipEarly, EfficientNetB7_FlipLate,
             ViT_Baseline, ViT_FlipEarly, ViT_FlipLate
         )
     except ImportError:
@@ -79,13 +79,13 @@ def create_model(model_name, num_classes=200, **kwargs):
     elif model_name_lower == 'vgg16_flip_late' or model_name_lower == 'vgg16_fliplate':
         return VGG16_FlipLate(num_classes=num_classes, **kwargs)
     
-    # EfficientNet-B0
-    elif model_name_lower == 'efficientnetb0_baseline' or model_name_lower == 'efficientnet_b0_baseline' or model_name_lower == 'efficientnetb0_baseline':
-        return EfficientNetB0_Baseline(num_classes=num_classes, **kwargs)
-    elif model_name_lower == 'efficientnetb0_flip_early' or model_name_lower == 'efficientnet_b0_flip_early' or model_name_lower == 'efficientnetb0_flipearly':
-        return EfficientNetB0_FlipEarly(num_classes=num_classes, **kwargs)
-    elif model_name_lower == 'efficientnetb0_flip_late' or model_name_lower == 'efficientnet_b0_flip_late' or model_name_lower == 'efficientnetb0_fliplate':
-        return EfficientNetB0_FlipLate(num_classes=num_classes, **kwargs)
+    # EfficientNet-B7 (largest EfficientNet model)
+    elif model_name_lower == 'efficientnetb7_baseline' or model_name_lower == 'efficientnet_b7_baseline' or model_name_lower == 'efficientnetb7_baseline':
+        return EfficientNetB7_Baseline(num_classes=num_classes, **kwargs)
+    elif model_name_lower == 'efficientnetb7_flip_early' or model_name_lower == 'efficientnet_b7_flip_early' or model_name_lower == 'efficientnetb7_flipearly':
+        return EfficientNetB7_FlipEarly(num_classes=num_classes, **kwargs)
+    elif model_name_lower == 'efficientnetb7_flip_late' or model_name_lower == 'efficientnet_b7_flip_late' or model_name_lower == 'efficientnetb7_fliplate':
+        return EfficientNetB7_FlipLate(num_classes=num_classes, **kwargs)
     
     # ViT
     elif model_name_lower == 'vit_baseline':
@@ -102,6 +102,6 @@ def create_model(model_name, num_classes=200, **kwargs):
                         f"vgg11_baseline, vgg11_flip_early, vgg11_flip_late, "
                         f"vgg11_modern_baseline, vgg11_modern_flip_early, vgg11_modern_flip_late, "
                         f"vgg16_baseline, vgg16_flip_early, vgg16_flip_late, "
-                        f"efficientnetb0_baseline, efficientnetb0_flip_early, efficientnetb0_flip_late, "
+                        f"efficientnetb7_baseline, efficientnetb7_flip_early, efficientnetb7_flip_late, "
                         f"vit_baseline, vit_flip_early, vit_flip_late")
 

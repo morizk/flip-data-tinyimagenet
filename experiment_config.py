@@ -16,7 +16,7 @@ def get_all_experiments() -> List[Dict[str, Any]]:
     # Architectures
     # Note: resnet18_modern uses ResNet18 architecture with modern hyperparameters (AdamW + Cosine)
     #       vgg11_modern uses VGG11 architecture with modern hyperparameters (AdamW + Cosine)
-    architectures = ['resnet18', 'resnet18_modern', 'vgg11', 'vgg11_modern', 'efficientnetb0', 'vit']
+    architectures = ['resnet18', 'resnet18_modern', 'vgg11', 'vgg11_modern', 'efficientnetb7', 'vit']
     
     # Fusion types
     fusion_types = ['baseline', 'early', 'late']
@@ -100,7 +100,7 @@ def validate_experiment(exp: Dict[str, Any]) -> bool:
     
     # Check valid values
     valid_archs = ['resnet18', 'resnet34', 'resnet18_modern',
-                   'vgg11', 'vgg11_modern', 'efficientnetb0', 'vit', 'vgg16']
+                   'vgg11', 'vgg11_modern', 'efficientnetb7', 'vit', 'vgg16']
     valid_fusions = ['baseline', 'early', 'late']
     valid_flip_modes = ['none', 'all', 'inverted']
     

@@ -418,27 +418,27 @@ class VGG16_FlipLate(VGG):
 
 
 # ============================================================================
-# EfficientNet-B0 Implementations
+# EfficientNet-B7 Implementations (largest EfficientNet model)
 # ============================================================================
 
-class EfficientNetB0_Baseline(nn.Module):
-    """EfficientNet-B0 baseline using timm"""
+class EfficientNetB7_Baseline(nn.Module):
+    """EfficientNet-B7 baseline using timm"""
     def __init__(self, num_classes=200, **kwargs):
-        super(EfficientNetB0_Baseline, self).__init__()
-        # EfficientNet in timm handles variable input sizes automatically
-        self.model = timm.create_model('efficientnet_b0', pretrained=False, num_classes=num_classes, 
+        super(EfficientNetB7_Baseline, self).__init__()
+        # EfficientNet-B7 in timm handles variable input sizes automatically
+        self.model = timm.create_model('efficientnet_b7', pretrained=False, num_classes=num_classes, 
                                        in_chans=3)
     
     def forward(self, x):
         return self.model(x)
 
 
-class EfficientNetB0_FlipEarly(nn.Module):
-    """EfficientNet-B0 with early fusion (flip as 4th input channel)"""
+class EfficientNetB7_FlipEarly(nn.Module):
+    """EfficientNet-B7 with early fusion (flip as 4th input channel)"""
     def __init__(self, num_classes=200, **kwargs):
-        super(EfficientNetB0_FlipEarly, self).__init__()
+        super(EfficientNetB7_FlipEarly, self).__init__()
         # Create model with 4 input channels
-        self.model = timm.create_model('efficientnet_b0', pretrained=False, num_classes=num_classes,
+        self.model = timm.create_model('efficientnet_b7', pretrained=False, num_classes=num_classes,
                                       in_chans=4)
     
     def forward(self, x, flip):
@@ -447,16 +447,16 @@ class EfficientNetB0_FlipEarly(nn.Module):
         return self.model(x)
 
 
-class EfficientNetB0_FlipLate(nn.Module):
-    """EfficientNet-B0 with late fusion (flip concatenated before classifier)"""
+class EfficientNetB7_FlipLate(nn.Module):
+    """EfficientNet-B7 with late fusion (flip concatenated before classifier)"""
     def __init__(self, num_classes=200, **kwargs):
-        super(EfficientNetB0_FlipLate, self).__init__()
-        self.model = timm.create_model('efficientnet_b0', pretrained=False, num_classes=num_classes,
+        super(EfficientNetB7_FlipLate, self).__init__()
+        self.model = timm.create_model('efficientnet_b7', pretrained=False, num_classes=num_classes,
                                        in_chans=3)
         # Modify classifier to accept flip feature
-        # EfficientNet-B0 uses 1280 features before classifier
+        # EfficientNet-B7 uses 2560 features before classifier
         old_classifier = self.model.classifier
-        self.model.classifier = nn.Linear(1280 + 1, num_classes)
+        self.model.classifier = nn.Linear(2560 + 1, num_classes)
     
     def forward(self, x, flip):
         # Get features before classifier

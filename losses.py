@@ -92,25 +92,50 @@ def flip_any_loss(predictions, true_labels):
 #     return true_class_probs.mean()
 
 
-def flip_inverted_loss(predictions, true_labels, confusion_targets):
+def flip_inverted_loss(predictions, true_labels, flip_values):
     """
-    New inverted loss (flip=1): encourage the model to predict a small set of
-    precomputed confusion classes for each true class.
-
-    - confusion_targets: (num_classes, num_classes) tensor on the same device
-      where each row i is a soft distribution over *wrong* classes
-      (e.g. 1/k over the top‑k most confused classes for class i).
-    - For a batch, we index the appropriate target row for each true label and
-      compute cross‑entropy with those soft targets.
+    Continuous flip loss: interpolates between normal and inverted based on flip value.
+    
+    Target distribution for flip value f:
+    - true_class probability: (1 - f)
+    - wrong_class probability: f / (N-1) for each wrong class
+    
+    Examples:
+    - flip=0.0: [1, 0, 0, ...] (normal classification)
+    - flip=1.0: [0, 1/(N-1), 1/(N-1), ...] (uniform over wrong classes)
+    - flip=0.5: [0.5, 0.5/(N-1), 0.5/(N-1), ...]
+    - flip=0.8: [0.2, 0.8/(N-1), 0.8/(N-1), ...]
+    
+    Args:
+        predictions: (batch_size, num_classes) model predictions
+        true_labels: (batch_size,) true class indices
+        flip_values: (batch_size,) flip values in [0, 1] (can be float tensor)
+    
+    Returns:
+        Loss value (scalar)
     """
-    # Select soft targets for this batch: (B, C)
-    targets = confusion_targets[true_labels]  # advanced indexing
-
-    # Log probabilities
+    batch_size, num_classes = predictions.shape
+    device = predictions.device
+    
+    # Ensure flip_values is a tensor on the correct device
+    if not isinstance(flip_values, torch.Tensor):
+        flip_values = torch.tensor(flip_values, dtype=torch.float32, device=device)
+    else:
+        flip_values = flip_values.to(device).float()
+    
+    # Create target distribution vectorized on GPU
+    # Initialize all classes with wrong_class_prob = flip / (N-1)
+    wrong_class_prob = flip_values.unsqueeze(1) / (num_classes - 1)  # (B, 1)
+    targets = wrong_class_prob.expand(-1, num_classes).clone()  # (B, C)
+    
+    # Overwrite true class probabilities: 1 - flip
+    batch_indices = torch.arange(batch_size, device=device)
+    targets[batch_indices, true_labels] = 1.0 - flip_values
+    
+    # Compute soft cross-entropy (KL divergence with soft targets)
     log_probs = F.log_softmax(predictions, dim=1)
-
-    # Soft cross-entropy: -(targets * log_probs).sum over classes, then mean over batch
     loss = -(targets * log_probs).sum(dim=1).mean()
+    
     return loss
 
 

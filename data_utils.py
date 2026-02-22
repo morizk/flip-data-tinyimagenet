@@ -1,6 +1,7 @@
 import torch
 from torch.utils.data import Dataset, DataLoader
 from torchvision import datasets, transforms
+from torchvision.transforms import RandAugment, RandomErasing
 import numpy as np
 import os
 from PIL import Image
@@ -102,6 +103,7 @@ class FlipDataset(Dataset):
 
 def get_cifar10_loaders(batch_size=64, use_augmentation=False, use_flip=False, 
                        use_ddp=False, rank=0, world_size=1):
+    
     """
     Get CIFAR-10 data loaders.
     
@@ -128,45 +130,37 @@ def get_cifar10_loaders(batch_size=64, use_augmentation=False, use_flip=False,
     
     # Load CIFAR-10 datasets
     train_dataset = datasets.CIFAR10(
-        root='./data', 
-        train=True, 
-        download=True, 
+        root='./data',
+        train=True,
+        download=True,
         transform=transform
     )
     
     test_dataset = datasets.CIFAR10(
-        root='./data', 
-        train=False, 
-        download=True, 
+        root='./data',
+        train=False,
+        download=True,
         transform=transform
     )
     
-    # Split train into train and validation (90% train, 10% val)
-    train_size = int(0.9 * len(train_dataset))
-    val_size = len(train_dataset) - train_size
-    train_dataset, val_dataset = torch.utils.data.random_split(
-        train_dataset, [train_size, val_size]
-    )
+    # Use test as val (CIFAR-10 doesn't have separate val set)
+    val_dataset = test_dataset
     
-    # Extract images and labels for flip dataset creation
+    # Create flip dataset wrapper if needed
     if use_flip:
-        # Get original images and labels (more efficient: load in batches)
-        # This is still needed but we'll optimize the dataset class
+        # Pre-load images and labels for flip dataset
         train_images = torch.stack([train_dataset[i][0] for i in range(len(train_dataset))])
         train_labels = torch.tensor([train_dataset[i][1] for i in range(len(train_dataset))])
-        
-        # Create flip dataset (CIFAR-10: 32×32, CIFAR-10 normalization)
         train_dataset = FlipDataset(
-            train_images, 
-            train_labels, 
+            images=train_images,
+            labels=train_labels,
             apply_augmentation=use_augmentation,
             image_size=32,
             mean=mean,
             std=std
         )
     
-    # Optimize num_workers based on CPU cores (but cap at 8 for efficiency)
-    import os
+    # Optimize num_workers based on CPU cores
     num_workers = min(8, os.cpu_count() or 4)
     
     # Create DistributedSampler for training if using DDP
@@ -179,12 +173,12 @@ def get_cifar10_loaders(batch_size=64, use_augmentation=False, use_flip=False,
             shuffle=True
         )
     
-    # Create data loaders with optimized settings
+    # Create data loaders
     train_loader = DataLoader(
-        train_dataset, 
-        batch_size=batch_size, 
-        shuffle=(train_sampler is None),  # Don't shuffle if using DistributedSampler
-        sampler=train_sampler,  # Use DistributedSampler if DDP
+        train_dataset,
+        batch_size=batch_size,
+        shuffle=(train_sampler is None),
+        sampler=train_sampler,
         num_workers=num_workers,
         pin_memory=True,
         persistent_workers=True if num_workers > 0 else False,
@@ -192,8 +186,8 @@ def get_cifar10_loaders(batch_size=64, use_augmentation=False, use_flip=False,
     )
     
     val_loader = DataLoader(
-        val_dataset, 
-        batch_size=batch_size, 
+        val_dataset,
+        batch_size=batch_size,
         shuffle=False,
         num_workers=num_workers,
         pin_memory=True,
@@ -202,8 +196,8 @@ def get_cifar10_loaders(batch_size=64, use_augmentation=False, use_flip=False,
     )
     
     test_loader = DataLoader(
-        test_dataset, 
-        batch_size=batch_size, 
+        test_dataset,
+        batch_size=batch_size,
         shuffle=False,
         num_workers=num_workers,
         pin_memory=True,
@@ -281,44 +275,29 @@ class TinyImageNetDataset(Dataset):
                         if img_file.endswith('.JPEG'):
                             img_path = os.path.join(class_dir, img_file)
                             self.samples.append((img_path, self.class_to_idx[wnid]))
-        
         elif self.split == 'val':
             val_dir = os.path.join(self.data_dir, 'val')
-            val_images_dir = os.path.join(val_dir, 'images')
-            val_annotations = os.path.join(val_dir, 'val_annotations.txt')
-            
-            if os.path.exists(val_annotations):
-                with open(val_annotations, 'r') as f:
+            annotations_file = os.path.join(val_dir, 'val_annotations.txt')
+            if os.path.exists(annotations_file):
+                with open(annotations_file, 'r') as f:
                     for line in f:
                         parts = line.strip().split('\t')
                         if len(parts) >= 2:
                             img_file = parts[0]
                             wnid = parts[1]
                             if wnid in self.class_to_idx:
-                                img_path = os.path.join(val_images_dir, img_file)
+                                img_path = os.path.join(val_dir, 'images', img_file)
                                 if os.path.exists(img_path):
                                     self.samples.append((img_path, self.class_to_idx[wnid]))
-            else:
-                # Fallback: try to load from images directory
-                if os.path.exists(val_images_dir):
-                    for img_file in os.listdir(val_images_dir):
-                        if img_file.endswith('.JPEG'):
-                            img_path = os.path.join(val_images_dir, img_file)
-                            # Try to infer class from filename or use 0 as default
-                            self.samples.append((img_path, 0))
-        
         elif self.split == 'test':
-            # TinyImageNet doesn't have official test labels, so we'll use val as test
-            # or create empty list if test directory doesn't exist
             test_dir = os.path.join(self.data_dir, 'test')
-            if os.path.exists(test_dir):
-                test_images_dir = os.path.join(test_dir, 'images')
-                if os.path.exists(test_images_dir):
-                    for img_file in os.listdir(test_images_dir):
-                        if img_file.endswith('.JPEG'):
-                            img_path = os.path.join(test_images_dir, img_file)
-                            # Test set has no labels, use 0 as placeholder
-                            self.samples.append((img_path, 0))
+            test_images_dir = os.path.join(test_dir, 'images')
+            if os.path.exists(test_images_dir):
+                for img_file in os.listdir(test_images_dir):
+                    if img_file.endswith('.JPEG'):
+                        img_path = os.path.join(test_images_dir, img_file)
+                        # Test set doesn't have labels, use -1 as placeholder
+                        self.samples.append((img_path, -1))
     
     def __len__(self):
         return len(self.samples)
@@ -327,11 +306,7 @@ class TinyImageNetDataset(Dataset):
         img_path, label = self.samples[idx]
         
         # Load image
-        try:
-            image = Image.open(img_path).convert('RGB')
-        except Exception as e:
-            # If image is corrupted, return a black image
-            image = Image.new('RGB', (64, 64), (0, 0, 0))
+        image = Image.open(img_path).convert('RGB')
         
         # Apply transform
         if self.transform:
@@ -340,8 +315,57 @@ class TinyImageNetDataset(Dataset):
         return image, label
 
 
+def get_augmentation_transforms(image_size=64, augmentation_type='basic', mean=None, std=None):
+    """
+    Get augmentation transforms based on augmentation type.
+    
+    Args:
+        image_size: Size of images (64 for TinyImageNet)
+        augmentation_type: 'basic' (ResNet/VGG) or 'advanced' (EfficientNet/ViT)
+        mean: Normalization mean (tuple of 3 values)
+        std: Normalization std (tuple of 3 values)
+    
+    Returns:
+        Transform composition for training
+    """
+    if mean is None:
+        mean = (0.485, 0.456, 0.406)  # ImageNet standard
+    if std is None:
+        std = (0.229, 0.224, 0.225)  # ImageNet standard
+    
+    if augmentation_type == 'advanced':
+        # Advanced augmentation for ViT: RandAugment, Mixup, CutMix, Random Erasing
+        return transforms.Compose([
+            transforms.RandomCrop(image_size, padding=4),
+            transforms.RandomHorizontalFlip(p=0.5),
+            RandAugment(num_ops=2, magnitude=9),  # RandAugment (DeiT paper: 9/0.5)
+            transforms.ToTensor(),
+            transforms.Normalize(mean, std),
+            RandomErasing(p=0.25, scale=(0.02, 0.33), ratio=(0.3, 3.3)),  # Random Erasing (DeiT paper: p=0.25)
+        ])
+    elif augmentation_type == 'efficientnet':
+        # EfficientNet paper: AutoAugment (we use RandAugment as modern alternative, NO Mixup/CutMix)
+        return transforms.Compose([
+            transforms.RandomCrop(image_size, padding=4),
+            transforms.RandomHorizontalFlip(p=0.5),
+            RandAugment(num_ops=2, magnitude=9),  # RandAugment (modern alternative to AutoAugment)
+            transforms.ToTensor(),
+            transforms.Normalize(mean, std),
+        ])
+    else:
+        # Basic augmentation for ResNet/VGG: RandomHorizontalFlip, RandomCrop, ColorJitter
+        return transforms.Compose([
+            transforms.RandomCrop(image_size, padding=4),
+            transforms.RandomHorizontalFlip(p=0.5),
+            transforms.ColorJitter(brightness=0.2, contrast=0.2, saturation=0.2, hue=0.1),
+            transforms.ToTensor(),
+            transforms.Normalize(mean, std)
+        ])
+
+
 def get_tinyimagenet_loaders(batch_size=128, use_augmentation=False, use_flip=False, 
-                             data_dir='./data', use_ddp=False, rank=0, world_size=1):
+                             data_dir='./data', use_ddp=False, rank=0, world_size=1,
+                             augmentation_type='basic'):
     """
     Get TinyImageNet data loaders.
     
@@ -353,6 +377,7 @@ def get_tinyimagenet_loaders(batch_size=128, use_augmentation=False, use_flip=Fa
         use_ddp: Whether to use distributed training
         rank: Process rank (for DDP)
         world_size: Number of processes (for DDP)
+        augmentation_type: 'basic' (ResNet/VGG) or 'advanced' (EfficientNet/ViT)
     
     Returns:
         train_loader, val_loader, test_loader
@@ -374,13 +399,12 @@ def get_tinyimagenet_loaders(batch_size=128, use_augmentation=False, use_flip=Fa
     
     # Augmentation for training
     if use_augmentation:
-        transform_train = transforms.Compose([
-            transforms.RandomCrop(64, padding=4),
-            transforms.RandomHorizontalFlip(p=0.5),
-            transforms.ColorJitter(brightness=0.2, contrast=0.2, saturation=0.2, hue=0.1),
-            transforms.ToTensor(),
-            transforms.Normalize(mean, std)
-        ])
+        transform_train = get_augmentation_transforms(
+            image_size=64,
+            augmentation_type=augmentation_type,
+            mean=mean,
+            std=std
+        )
     
     # Load TinyImageNet datasets
     train_dataset = TinyImageNetDataset(
@@ -422,12 +446,12 @@ def get_tinyimagenet_loaders(batch_size=128, use_augmentation=False, use_flip=Fa
             shuffle=True
         )
     
-    # Create data loaders with optimized settings
+    # Create data loaders
     train_loader = DataLoader(
         train_dataset,
         batch_size=batch_size,
-        shuffle=(train_sampler is None),  # Don't shuffle if using DistributedSampler
-        sampler=train_sampler,  # Use DistributedSampler if DDP
+        shuffle=(train_sampler is None),
+        sampler=train_sampler,
         num_workers=num_workers,
         pin_memory=True,
         persistent_workers=True if num_workers > 0 else False,
@@ -456,3 +480,95 @@ def get_tinyimagenet_loaders(batch_size=128, use_augmentation=False, use_flip=Fa
     
     return train_loader, val_loader, test_loader
 
+
+# Mixup and CutMix augmentation functions (applied in training loop, not in transforms)
+def mixup_data(x, y, alpha=1.0):
+    """
+    Mixup augmentation.
+    
+    Args:
+        x: Input images (batch_size, channels, height, width)
+        y: Labels (batch_size,)
+        alpha: Beta distribution parameter (alpha=1.0 gives uniform distribution)
+    
+    Returns:
+        mixed_x: Mixed images
+        y_a, y_b: Original and shuffled labels
+        lam: Mixup lambda coefficient
+    """
+    if alpha > 0:
+        lam = np.random.beta(alpha, alpha)
+    else:
+        lam = 1
+    
+    batch_size = x.size(0)
+    index = torch.randperm(batch_size).to(x.device)
+    
+    mixed_x = lam * x + (1 - lam) * x[index, :]
+    y_a, y_b = y, y[index]
+    return mixed_x, y_a, y_b, lam
+
+
+def cutmix_data(x, y, alpha=1.0):
+    """
+    CutMix augmentation.
+    
+    Args:
+        x: Input images (batch_size, channels, height, width)
+        y: Labels (batch_size,)
+        alpha: Beta distribution parameter
+    
+    Returns:
+        x: CutMix images (modified in-place)
+        y_a, y_b: Original and shuffled labels
+        lam: CutMix lambda coefficient
+    """
+    if alpha > 0:
+        lam = np.random.beta(alpha, alpha)
+    else:
+        lam = 1
+    
+    batch_size = x.size(0)
+    index = torch.randperm(batch_size).to(x.device)
+    
+    # Generate random bounding box
+    W, H = x.size(3), x.size(2)
+    cut_rat = np.sqrt(1.0 - lam)
+    cut_w = np.int32(W * cut_rat)
+    cut_h = np.int32(H * cut_rat)
+    
+    # Random center
+    cx = np.random.randint(W)
+    cy = np.random.randint(H)
+    
+    # Clamp bounding box
+    bbx1 = np.clip(cx - cut_w // 2, 0, W)
+    bby1 = np.clip(cy - cut_h // 2, 0, H)
+    bbx2 = np.clip(cx + cut_w // 2, 0, W)
+    bby2 = np.clip(cy + cut_h // 2, 0, H)
+    
+    # Apply CutMix
+    x[:, :, bby1:bby2, bbx1:bbx2] = x[index, :, bby1:bby2, bbx1:bbx2]
+    
+    # Adjust lambda to match actual pixel ratio
+    lam = 1 - ((bbx2 - bbx1) * (bby2 - bby1) / (W * H))
+    
+    y_a, y_b = y, y[index]
+    return x, y_a, y_b, lam
+
+
+def mixup_criterion(criterion, pred, y_a, y_b, lam):
+    """
+    Compute loss for Mixup/CutMix.
+    
+    Args:
+        criterion: Loss function
+        pred: Model predictions
+        y_a: First set of labels
+        y_b: Second set of labels
+        lam: Mixup/CutMix lambda coefficient
+    
+    Returns:
+        Loss value
+    """
+    return lam * criterion(pred, y_a) + (1 - lam) * criterion(pred, y_b)

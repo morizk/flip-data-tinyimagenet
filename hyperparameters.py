@@ -28,6 +28,7 @@ ARCHITECTURE_HYPERPARAMETERS: Dict[str, Dict[str, Any]] = {
             'gamma': 0.1,
         },
         'allow_ddp': False,  # Force single GPU only
+        'augmentation_type': 'basic',  # Basic augmentation: RandomHorizontalFlip, RandomCrop, ColorJitter
     },
     # He et al. 2016, ImageNet - Classic Training (same schedule as ResNet-18)
     'resnet34': {
@@ -41,6 +42,7 @@ ARCHITECTURE_HYPERPARAMETERS: Dict[str, Dict[str, Any]] = {
             'gamma': 0.1,
         },
         'allow_ddp': False,
+        'augmentation_type': 'basic',  # Basic augmentation: RandomHorizontalFlip, RandomCrop, ColorJitter
     },
     # ResNet18 with Modern Training (AdamW + Cosine Warmup)
     # Note: Uses ResNet18 architecture but with modern hyperparameters for diversity
@@ -54,6 +56,7 @@ ARCHITECTURE_HYPERPARAMETERS: Dict[str, Dict[str, Any]] = {
             'warmup_epochs': 5,  
         },
         'allow_ddp': False,  # Force single GPU only
+        'augmentation_type': 'basic',  # Basic augmentation: RandomHorizontalFlip, RandomCrop, ColorJitter
     },
 
     # Simonyan & Zisserman 2015 (VGG) – Classic Training
@@ -70,6 +73,7 @@ ARCHITECTURE_HYPERPARAMETERS: Dict[str, Dict[str, Any]] = {
             'verbose': True,       # Log LR reductions
         },
         'allow_ddp': False,  # Force single GPU only
+        'augmentation_type': 'basic',  # Basic augmentation: RandomHorizontalFlip, RandomCrop, ColorJitter
     },
     'vgg16': {
         'batch_size': 256,         # Paper: batch size 256
@@ -84,6 +88,7 @@ ARCHITECTURE_HYPERPARAMETERS: Dict[str, Dict[str, Any]] = {
             'verbose': True,       # Log LR reductions
         },
         'allow_ddp': False,  # Force single GPU only
+        'augmentation_type': 'basic',  # Basic augmentation: RandomHorizontalFlip, RandomCrop, ColorJitter
     },
     # VGG11 with Modern Training (AdamW + Cosine Warmup)
     # Note: Uses VGG11 architecture but with modern hyperparameters for diversity
@@ -97,17 +102,19 @@ ARCHITECTURE_HYPERPARAMETERS: Dict[str, Dict[str, Any]] = {
             'warmup_epochs': 5,
         },
         'allow_ddp': False,  # Force single GPU only
+        'augmentation_type': 'basic',  # Basic augmentation: RandomHorizontalFlip, RandomCrop, ColorJitter
     },
 
-    # EfficientNet-B0 – Tan & Le 2019
-    'efficientnetb0': {
-        'batch_size': 256,
+    # EfficientNet-B7 – Tan & Le 2019 (original paper uses AutoAugment, not Mixup/CutMix)
+    'efficientnetb7': {
+        'batch_size': 128,  # Reduced batch size for B7 (larger model)
         'learning_rate': 0.016,
         'optimizer': 'rmsprop',
         'weight_decay': 1e-5,
         'scheduler': 'rmsprop_decay',   
         'scheduler_params': {},
         'allow_ddp': False,  # Force single GPU only
+        'augmentation_type': 'efficientnet', 
     },
 
     'vit': {
@@ -122,6 +129,9 @@ ARCHITECTURE_HYPERPARAMETERS: Dict[str, Dict[str, Any]] = {
             'warmup_epochs': 3.4,      
         },
         'allow_ddp': True,  # Allow multi-GPU training
+        'augmentation_type': 'advanced',  # Advanced augmentation: RandAugment, Mixup, CutMix, Random Erasing
+        'mixup_alpha': 0.8,  # Mixup probability (DeiT paper uses 0.8)
+        'cutmix_alpha': 1.0,  # CutMix probability (DeiT paper uses 1.0)
     },
 }
 
@@ -159,6 +169,10 @@ def get_hyperparameters(architecture: str, num_gpus: int = 1) -> Dict[str, Any]:
         else:
             # Single GPU: use configured batch_size, gradient accumulation handles the rest
             hyperparams['_auto_adjusted_batch'] = False
+    
+    # Set default augmentation_type if not specified
+    if 'augmentation_type' not in hyperparams:
+        hyperparams['augmentation_type'] = 'basic'
     
     return hyperparams
 
