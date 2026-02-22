@@ -293,6 +293,7 @@ class ExtendedExperimentRunner:
         
         total_loss = torch.tensor(0.0, device=self.device)  
         correct = 0
+        correct_top5 = 0
         total = 0
         flip_mode = exp_config['flip_mode']
         fusion_type = exp_config['fusion_type']
@@ -487,20 +488,23 @@ class ExtendedExperimentRunner:
                 
                 current_loss = (total_loss / batches_done).item() if batches_done > 0 else 0.0
                 current_acc = 100 * correct / total if total > 0 else 0.0
+                current_acc_top5 = 100 * correct_top5 / total if total > 0 else 0.0
                 
                 epoch_str = f"Epoch {epoch_num + 1}/{self.num_epochs}" if epoch_num is not None else "Epoch"
                 step_info = f"[Step {batches_done // accumulation_steps}]" if accumulation_steps > 1 and optimizer_step_occurred else ""
                 self.logger.info(
                     f"{epoch_str} {step_info} | Batch {batches_done}/{total_batches} | "
-                    f"Loss: {current_loss:.4f} | Acc: {current_acc:.2f}% | "
+                    f"Loss: {current_loss:.4f} | Acc: {current_acc:.2f}% | Top5: {current_acc_top5:.2f}% | "
                     f"Speed: {batches_per_sec:.1f} batch/s | ETA: {eta_min}m{eta_sec}s"
                 )
             
             # Unscale loss for logging (multiply by accumulation_steps)
             total_loss += loss * accumulation_steps
             _, predicted = torch.max(outputs.data, 1)
+            _, top5_pred = torch.topk(outputs.data, min(5, outputs.size(1)), dim=1)
             total += labels.size(0)
             correct += (predicted == labels).sum().item()
+            correct_top5 += (top5_pred == labels.unsqueeze(1)).any(dim=1).sum().item()
         
         # Handle remaining gradients if batch doesn't divide evenly
         if (batch_idx + 1) % accumulation_steps != 0:
@@ -510,15 +514,17 @@ class ExtendedExperimentRunner:
         # Only call .item() once at the end
         avg_loss = (total_loss / len(train_loader)).item()
         accuracy = 100 * correct / total
+        accuracy_top5 = 100 * correct_top5 / total
         epoch_time = time.time() - epoch_start_time
-        self.logger.info(f"Epoch {epoch_num + 1 if epoch_num is not None else '?'} completed in {epoch_time:.1f}s | Loss: {avg_loss:.4f} | Acc: {accuracy:.2f}%")
-        return avg_loss, accuracy
+        self.logger.info(f"Epoch {epoch_num + 1 if epoch_num is not None else '?'} completed in {epoch_time:.1f}s | Loss: {avg_loss:.4f} | Acc: {accuracy:.2f}% | Top5: {accuracy_top5:.2f}%")
+        return avg_loss, accuracy, accuracy_top5
     
     def evaluate(self, model, data_loader, exp_config):
         """Evaluate model."""
         model.eval()
         total_loss = 0.0
         correct = 0
+        correct_top5 = 0
         total = 0
         fusion_type = exp_config['fusion_type']
         
@@ -558,12 +564,15 @@ class ExtendedExperimentRunner:
                 
                 total_loss += loss.item()
                 _, predicted = torch.max(outputs.data, 1)
+                _, top5_pred = torch.topk(outputs.data, min(5, outputs.size(1)), dim=1)
                 total += labels.size(0)
                 correct += (predicted == labels).sum().item()
+                correct_top5 += (top5_pred == labels.unsqueeze(1)).any(dim=1).sum().item()
         
         avg_loss = total_loss / len(data_loader)
         accuracy = 100 * correct / total
-        return avg_loss, accuracy
+        accuracy_top5 = 100 * correct_top5 / total
+        return avg_loss, accuracy, accuracy_top5
     
     def run_experiment(self, exp_config, exp_idx=None, total_experiments=None):
         """Run a single experiment with wandb logging."""
@@ -620,8 +629,10 @@ class ExtendedExperimentRunner:
                 writer = csv.writer(f)
                 if not csv_exists:
                     # Write header
-                    writer.writerow(['epoch', 'train_loss', 'train_acc', 'val_loss', 'val_acc', 
-                                   'test_loss', 'test_acc', 'learning_rate', 'best_val_acc', 'best_epoch'])
+                    writer.writerow(['epoch', 'train_loss', 'train_acc', 'train_acc_top5', 
+                                   'val_loss', 'val_acc', 'val_acc_top5', 
+                                   'test_loss', 'test_acc', 'test_acc_top5', 
+                                   'learning_rate', 'best_val_acc', 'best_epoch'])
         
         if os.path.exists(latest_checkpoint):
             try:
@@ -798,9 +809,9 @@ class ExtendedExperimentRunner:
         
         start_epoch = 0
         history = {
-            'train_loss': [], 'train_acc': [],
-            'val_loss': [], 'val_acc': [],
-            'test_loss': [], 'test_acc': []
+            'train_loss': [], 'train_acc': [], 'train_acc_top5': [],
+            'val_loss': [], 'val_acc': [], 'val_acc_top5': [],
+            'test_loss': [], 'test_acc': [], 'test_acc_top5': []
         }
         best_val_acc = 0.0
         best_test_acc = 0.0
@@ -841,7 +852,12 @@ class ExtendedExperimentRunner:
                     last_improvement_epoch = checkpoint.get('last_improvement_epoch', 0)
                 else:
                     last_improvement_epoch = best_epoch if best_epoch > 0 else 0
-                history = checkpoint.get('history', history)
+                loaded_history = checkpoint.get('history', history)
+                # Merge loaded history with default to handle missing top-5 keys (backward compatibility)
+                for key in history.keys():
+                    if key in loaded_history:
+                        history[key] = loaded_history[key]
+                    # If key is missing (e.g., old checkpoint without top-5), keep default empty list
                 
                 # Restore start_time if available
                 if 'start_time' in checkpoint and checkpoint['start_time']:
@@ -884,7 +900,7 @@ class ExtendedExperimentRunner:
         self.logger.info(f"{'='*80}\n")
         
         for epoch in range(start_epoch, self.num_epochs):
-            train_loss, train_acc = self.train_epoch(model, train_loader, optimizer, exp_config, epoch_num=epoch)
+            train_loss, train_acc, train_acc_top5 = self.train_epoch(model, train_loader, optimizer, exp_config, epoch_num=epoch)
 
             # Step schedulers that don't require validation metrics (before evaluation)
             if scheduler is not None and scheduler_name != 'plateau':
@@ -907,14 +923,16 @@ class ExtendedExperimentRunner:
             if evaluate_on_this_rank:
                 # Unwrap DDP model for evaluation if needed
                 eval_model = model.module if self.use_ddp else model
-                val_loss, val_acc = self.evaluate(eval_model, val_loader, exp_config)
-                test_loss, test_acc = self.evaluate(eval_model, test_loader, exp_config)
+                val_loss, val_acc, val_acc_top5 = self.evaluate(eval_model, val_loader, exp_config)
+                test_loss, test_acc, test_acc_top5 = self.evaluate(eval_model, test_loader, exp_config)
                 
                 # Update history
                 history['val_loss'].append(val_loss)
                 history['val_acc'].append(val_acc)
+                history['val_acc_top5'].append(val_acc_top5)
                 history['test_loss'].append(test_loss)
                 history['test_acc'].append(test_acc)
+                history['test_acc_top5'].append(test_acc_top5)
                 
                 # Step ReduceLROnPlateau scheduler with validation metric (after evaluation)
                 if scheduler is not None and scheduler_name == 'plateau':
@@ -925,20 +943,25 @@ class ExtendedExperimentRunner:
                 if len(history['val_loss']) > 0:
                     val_loss = history['val_loss'][-1]
                     val_acc = history['val_acc'][-1]
+                    val_acc_top5 = history['val_acc_top5'][-1]
                     test_loss = history['test_loss'][-1]
                     test_acc = history['test_acc'][-1]
+                    test_acc_top5 = history['test_acc_top5'][-1]
                 else:
                     # First epoch, evaluate to get baseline
-                    val_loss, val_acc = self.evaluate(model, val_loader, exp_config)
-                    test_loss, test_acc = self.evaluate(model, test_loader, exp_config)
+                    val_loss, val_acc, val_acc_top5 = self.evaluate(model, val_loader, exp_config)
+                    test_loss, test_acc, test_acc_top5 = self.evaluate(model, test_loader, exp_config)
                     history['val_loss'].append(val_loss)
                     history['val_acc'].append(val_acc)
+                    history['val_acc_top5'].append(val_acc_top5)
                     history['test_loss'].append(test_loss)
                     history['test_acc'].append(test_acc)
+                    history['test_acc_top5'].append(test_acc_top5)
             
             # Always update train history
             history['train_loss'].append(train_loss)
             history['train_acc'].append(train_acc)
+            history['train_acc_top5'].append(train_acc_top5)
             
             # Log to CSV file (only on main process)
             if self._is_main_process():
@@ -946,19 +969,22 @@ class ExtendedExperimentRunner:
                     writer = csv.writer(f)
                     if evaluate_on_this_rank:
                         writer.writerow([
-                            epoch + 1, train_loss, train_acc,
-                            val_loss, val_acc, test_loss, test_acc,
+                            epoch + 1, train_loss, train_acc, train_acc_top5,
+                            val_loss, val_acc, val_acc_top5, test_loss, test_acc, test_acc_top5,
                             current_lr, best_val_acc, best_epoch
                         ])
                     else:
                         # Use last known values for val/test if not evaluated this epoch
                         last_val_loss = history['val_loss'][-1] if len(history['val_loss']) > 0 else ''
                         last_val_acc = history['val_acc'][-1] if len(history['val_acc']) > 0 else ''
+                        last_val_acc_top5 = history['val_acc_top5'][-1] if len(history['val_acc_top5']) > 0 else ''
                         last_test_loss = history['test_loss'][-1] if len(history['test_loss']) > 0 else ''
                         last_test_acc = history['test_acc'][-1] if len(history['test_acc']) > 0 else ''
+                        last_test_acc_top5 = history['test_acc_top5'][-1] if len(history['test_acc_top5']) > 0 else ''
                         writer.writerow([
-                            epoch + 1, train_loss, train_acc,
-                            last_val_loss, last_val_acc, last_test_loss, last_test_acc,
+                            epoch + 1, train_loss, train_acc, train_acc_top5,
+                            last_val_loss, last_val_acc, last_val_acc_top5, 
+                            last_test_loss, last_test_acc, last_test_acc_top5,
                             current_lr, best_val_acc, best_epoch
                         ])
             
@@ -968,6 +994,7 @@ class ExtendedExperimentRunner:
                     'epoch': epoch + 1,
                     'train_loss': train_loss,
                     'train_acc': train_acc,
+                    'train_acc_top5': train_acc_top5,
                     'learning_rate': current_lr,
                     'best_val_acc': best_val_acc,
                     'best_test_acc': best_test_acc,
@@ -976,8 +1003,10 @@ class ExtendedExperimentRunner:
                     log_dict.update({
                         'val_loss': val_loss,
                         'val_acc': val_acc,
+                        'val_acc_top5': val_acc_top5,
                         'test_loss': test_loss,
                         'test_acc': test_acc,
+                        'test_acc_top5': test_acc_top5,
                     })
                 wandb.log(log_dict)
             
@@ -1021,9 +1050,9 @@ class ExtendedExperimentRunner:
                         epochs_since_improvement = (epoch + 1) - start_epoch
                     self.logger.info(
                         f"Epoch {epoch+1}/{self.num_epochs} - "
-                        f"Train: {train_loss:.4f}/{train_acc:.2f}% | "
-                        f"Val: {val_loss:.4f}/{val_acc:.2f}% | "
-                        f"Test: {test_loss:.4f}/{test_acc:.2f}% | "
+                        f"Train: {train_loss:.4f}/{train_acc:.2f}%/{train_acc_top5:.2f}% | "
+                        f"Val: {val_loss:.4f}/{val_acc:.2f}%/{val_acc_top5:.2f}% | "
+                        f"Test: {test_loss:.4f}/{test_acc:.2f}%/{test_acc_top5:.2f}% | "
                         f"Best: {best_val_acc:.2f}% (epoch {best_epoch}) | "
                         f"LR: {current_lr:.6f} | "
                         f"No improvement: {epochs_since_improvement}/{self.early_stop_patience} epochs"
@@ -1031,7 +1060,7 @@ class ExtendedExperimentRunner:
                 else:
                     self.logger.info(
                         f"Epoch {epoch+1}/{self.num_epochs} - "
-                        f"Train: {train_loss:.4f}/{train_acc:.2f}% | "
+                        f"Train: {train_loss:.4f}/{train_acc:.2f}%/{train_acc_top5:.2f}% | "
                         f"(Skipped eval) | "
                         f"Best: {best_val_acc:.2f}% (epoch {best_epoch}) | "
                         f"LR: {current_lr:.6f}"
@@ -1056,12 +1085,14 @@ class ExtendedExperimentRunner:
             # Final epoch wasn't evaluated, evaluate now
             self.logger.info("Evaluating final model...")
             eval_model = model.module if self.use_ddp else model
-            final_val_loss, final_val_acc = self.evaluate(eval_model, val_loader, exp_config)
-            final_test_loss, final_test_acc = self.evaluate(eval_model, test_loader, exp_config)
+            final_val_loss, final_val_acc, final_val_acc_top5 = self.evaluate(eval_model, val_loader, exp_config)
+            final_test_loss, final_test_acc, final_test_acc_top5 = self.evaluate(eval_model, test_loader, exp_config)
             history['val_loss'].append(final_val_loss)
             history['val_acc'].append(final_val_acc)
+            history['val_acc_top5'].append(final_val_acc_top5)
             history['test_loss'].append(final_test_loss)
             history['test_acc'].append(final_test_acc)
+            history['test_acc_top5'].append(final_test_acc_top5)
             
             # Update best if final is better
             if final_val_acc > best_val_acc:
@@ -1071,6 +1102,8 @@ class ExtendedExperimentRunner:
         
         # Get final test accuracy from history
         final_test_acc = history['test_acc'][-1] if len(history['test_acc']) > 0 else 0.0
+        final_test_acc_top5 = history['test_acc_top5'][-1] if len(history['test_acc_top5']) > 0 else 0.0
+        best_test_acc_top5 = history['test_acc_top5'][best_epoch - 1] if best_epoch > 0 and len(history['test_acc_top5']) >= best_epoch else 0.0
         
         end_time = datetime.now()
         training_time = (end_time - start_time).total_seconds()
@@ -1081,7 +1114,9 @@ class ExtendedExperimentRunner:
             wandb.log({
                 'best_val_acc': best_val_acc,
                 'best_test_acc': best_test_acc,
+                'best_test_acc_top5': best_test_acc_top5,
                 'final_test_acc': final_test_acc,
+                'final_test_acc_top5': final_test_acc_top5,
                 'best_epoch': best_epoch,
                 'total_training_time_seconds': training_time,
                 'actual_epochs': actual_epochs,
@@ -1092,14 +1127,16 @@ class ExtendedExperimentRunner:
             wandb.summary.update({
                 'best_val_acc': best_val_acc,
                 'best_test_acc': best_test_acc,
-            'final_test_acc': final_test_acc,
-            'best_epoch': best_epoch,
-            'total_training_time_seconds': training_time,
-            'actual_epochs': actual_epochs,
-            'num_parameters': num_params,
-        })
+                'best_test_acc_top5': best_test_acc_top5,
+                'final_test_acc': final_test_acc,
+                'final_test_acc_top5': final_test_acc_top5,
+                'best_epoch': best_epoch,
+                'total_training_time_seconds': training_time,
+                'actual_epochs': actual_epochs,
+                'num_parameters': num_params,
+            })
         
-        self.logger.info(f"✓ Training completed: Best val acc: {best_val_acc:.2f}%, Best test acc: {best_test_acc:.2f}%")
+        self.logger.info(f"✓ Training completed: Best val acc: {best_val_acc:.2f}%, Best test acc: {best_test_acc:.2f}%/{best_test_acc_top5:.2f}%")
         self.logger.info(f"  Trained for {actual_epochs} epochs (out of {self.num_epochs} max)")
         self.logger.info(f"  Training time: {training_time/3600:.2f} hours")
         
