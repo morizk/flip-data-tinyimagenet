@@ -6,42 +6,40 @@ This document lists the parameter counts for all model variants.
 
 ### ResNet-18
 - **Baseline**: 11,279,112 parameters
-- **FlipEarly**: 11,282,248 parameters (+3,136)
+- **FlipEarly (FiLM)**: 11,404,424 parameters (+125,312)
 - **FlipLate**: 11,279,312 parameters (+200)
 
 ### ResNet-34
 - **Baseline**: 21,387,272 parameters
-- **FlipEarly**: 21,390,408 parameters (+3,136)
+- **FlipEarly (FiLM)**: 21,512,584 parameters (+125,312)
 - **FlipLate**: 21,387,472 parameters (+200)
 
 ## VGG Architectures
 
 ### VGG-11
 - **Baseline**: 28,927,944 parameters
-- **FlipEarly**: 28,928,520 parameters (+576)
+- **FlipEarly (FiLM)**: 29,119,944 parameters (+192,000)
 - **FlipLate**: 28,932,040 parameters (+4,096)
 
 ### VGG-16
 - **Baseline**: 34,425,096 parameters
-- **FlipEarly**: 34,425,672 parameters (+576)
+- **FlipEarly (FiLM)**: 34,617,096 parameters (+192,000)
 - **FlipLate**: 34,429,192 parameters (+4,096)
 
-## EfficientNet-B0
+## EfficientNetV2-S
 
-- **Baseline**: 4,263,748 parameters
-- **FlipEarly**: 4,264,036 parameters (+288)
-- **FlipLate**: 4,263,948 parameters (+200)
+- **Baseline**: 20,433,688 parameters
+- **FlipEarly (FiLM)**: 20,522,856 parameters (+89,168)
+- **FlipLate**: 20,433,888 parameters (+200)
 
-## Vision Transformer (ViT)
+## Vision Transformer (ViT-Base)
 
 - **Baseline**: 85,408,712 parameters
-- **FlipEarly**: 85,564,616 parameters (+155,904)
+- **FlipEarly (Flip Token)**: 85,565,384 parameters (+156,672)
 - **FlipLate**: 85,408,912 parameters (+200)
 
 ## Notes
 
-- **Early Fusion**: Adds parameters in the first convolutional layer (CNNs) or flip token/embedding (ViT)
-- **Late Fusion**: Adds parameters in the final classification layer (typically +200 for 200 classes, or +1 input feature)
-- **Parameter Overhead**: Flip feature integration adds minimal parameters (<0.1% for most architectures, ~0.2% for ViT early fusion)
-
-
+- **Early Fusion (FiLM)**: Uses Feature-wise Linear Modulation — the flip value generates per-channel scale (γ) and shift (β) that modulate feature maps at each stage. Initialized to identity (γ=1, β=0) so the model starts identical to baseline. Adds ~0.4–0.7% overhead.
+- **Early Fusion (ViT)**: Uses a dedicated flip token with learnable positional embedding, processed through all transformer layers via self-attention.
+- **Late Fusion**: Flip value concatenated with features before the final classification layer. Adds minimal parameters (+200 for 200-class output, or +4,096 for VGG's wider classifier).

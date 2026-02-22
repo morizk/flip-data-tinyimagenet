@@ -49,6 +49,12 @@ def run_worker_ddp(rank, world_size, args, exp_config):
         num_gpus = world_size
         hyperparams = get_hyperparameters(exp_config['architecture'], num_gpus=num_gpus)
 
+        # Collect extra optimizer params (e.g. RMSProp alpha/momentum/eps)
+        extra_opt_params = {}
+        for key in ('alpha', 'momentum', 'eps'):
+            if key in hyperparams:
+                extra_opt_params[key] = hyperparams[key]
+
         runner = ExtendedExperimentRunner(
             num_epochs=args.num_epochs,
             batch_size=hyperparams['batch_size'],
@@ -66,6 +72,7 @@ def run_worker_ddp(rank, world_size, args, exp_config):
             gradient_clip=hyperparams.get('gradient_clip'),
             scheduler=hyperparams.get('scheduler'),
             scheduler_params=hyperparams.get('scheduler_params', {}),
+            optimizer_extra_params=extra_opt_params,
         )
 
         # Run experiment (WandB initialization happens inside run_experiment)
@@ -93,6 +100,12 @@ def launch_single(args, exp_config, device, logger):
     # Get hyperparameters (single GPU, so num_gpus=1)
     hyperparams = get_hyperparameters(exp_config['architecture'], num_gpus=1)
     
+    # Collect extra optimizer params (e.g. RMSProp alpha/momentum/eps)
+    extra_opt_params = {}
+    for key in ('alpha', 'momentum', 'eps'):
+        if key in hyperparams:
+            extra_opt_params[key] = hyperparams[key]
+    
     runner = ExtendedExperimentRunner(
         num_epochs=args.num_epochs,
         batch_size=hyperparams['batch_size'],
@@ -110,6 +123,7 @@ def launch_single(args, exp_config, device, logger):
         gradient_clip=hyperparams.get('gradient_clip'),
         scheduler=hyperparams.get('scheduler'),
         scheduler_params=hyperparams.get('scheduler_params', {}),
+        optimizer_extra_params=extra_opt_params,
     )
 
     return runner.run_experiment(exp_config)
@@ -252,6 +266,12 @@ def main():
                 # Get ALL hyperparameters for this architecture (single GPU mode)
                 hyperparams = get_hyperparameters(exp_config['architecture'], num_gpus=1)
                 
+                # Collect extra optimizer params (e.g. RMSProp alpha/momentum/eps)
+                extra_opt_params = {}
+                for key in ('alpha', 'momentum', 'eps'):
+                    if key in hyperparams:
+                        extra_opt_params[key] = hyperparams[key]
+                
                 # Create experiment runner with all hyperparameters
                 runner = ExtendedExperimentRunner(
                     num_epochs=args.num_epochs,
@@ -271,6 +291,7 @@ def main():
                     gradient_clip=hyperparams.get('gradient_clip'),
                     scheduler=hyperparams.get('scheduler'),
                     scheduler_params=hyperparams.get('scheduler_params', {}),
+                    optimizer_extra_params=extra_opt_params,
                 )
 
                 # Run experiment (WandB initialization happens inside run_experiment)

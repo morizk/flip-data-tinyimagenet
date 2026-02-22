@@ -69,7 +69,7 @@ ARCHITECTURE_HYPERPARAMETERS: Dict[str, Dict[str, Any]] = {
         'scheduler_params': {
             'mode': 'max',         # Monitor validation accuracy (maximize)
             'factor': 0.1,         # Paper: Decreased by factor of 10
-            'patience': 10,        # Wait 10 epochs without improvement (reasonable default)
+            'patience': 2,         # 2 checks × EVAL_INTERVAL(5) = 10 effective epochs patience
             'verbose': True,       # Log LR reductions
         },
         'allow_ddp': False,  # Force single GPU only
@@ -84,7 +84,7 @@ ARCHITECTURE_HYPERPARAMETERS: Dict[str, Dict[str, Any]] = {
         'scheduler_params': {
             'mode': 'max',         # Monitor validation accuracy (maximize)
             'factor': 0.1,         # Paper: Decreased by factor of 10
-            'patience': 10,        # Wait 10 epochs without improvement (reasonable default)
+            'patience': 2,         # 2 checks × EVAL_INTERVAL(5) = 10 effective epochs patience
             'verbose': True,       # Log LR reductions
         },
         'allow_ddp': False,  # Force single GPU only
@@ -105,24 +105,32 @@ ARCHITECTURE_HYPERPARAMETERS: Dict[str, Dict[str, Any]] = {
         'augmentation_type': 'basic',  # Basic augmentation: RandomHorizontalFlip, RandomCrop, ColorJitter
     },
 
-    # EfficientNet-B7 – Tan & Le 2019 (original paper uses AutoAugment, not Mixup/CutMix)
-    'efficientnetb7': {
-        'batch_size': 128,  # Reduced batch size for B7 (larger model)
-        'learning_rate': 0.016,
+    # EfficientNetV2-S – Tan & Le 2021 (EfficientNetV2: Smaller Models and Faster Training)
+    'efficientnetv2_s': {
+        'batch_size': 1024,  # Per-GPU batch size (will auto-adjust for multi-GPU)
+        'effective_batch_size': 4096,  # Paper: total batch size 4096
+        'learning_rate': 0.256,  # Paper: peak LR after warmup (warmup from 0 to 0.256)
         'optimizer': 'rmsprop',
-        'weight_decay': 1e-5,
-        'scheduler': 'rmsprop_decay',   
-        'scheduler_params': {},
-        'allow_ddp': False,  # Force single GPU only
-        'augmentation_type': 'efficientnet', 
+        'alpha': 0.9,  # Paper: RMSProp decay=0.9
+        'momentum': 0.9,  # Paper: RMSProp momentum=0.9
+        'eps': 0.001,  # RMSProp epsilon
+        'weight_decay': 1e-5,  # Paper: weight decay 1e-5
+        'scheduler': 'rmsprop_warmup_decay',  # Paper: warmup then decay by 0.97 every 2.4 epochs
+        'scheduler_params': {
+            'warmup_epochs': 5,  # Warmup duration (will be calculated based on total epochs)
+            'decay_epochs': 2.4,  # Paper: decay every 2.4 epochs
+            'gamma': 0.97,  # Paper: decay factor 0.97
+        },
+        'allow_ddp': True,  # Allow multi-GPU training (like ViT)
+        'augmentation_type': 'efficientnet',  # Paper: RandAugment (Cubuk et al., 2020)
     },
 
     'vit': {
-        'batch_size': 160,            # Base batch size (will be auto-adjusted for multi-GPU)
+        'batch_size': 128,            # Base batch size (divides evenly into 4096: 4096/128=32 steps)
         'effective_batch_size': 4096,  # Target effective batch size (can be changed)
         'learning_rate': 3e-3,         
         'optimizer': 'adamw',          
-        'weight_decay': 0.3,           
+        'weight_decay': 0.05,          # DeiT paper: 0.05 for training from scratch (0.3 is for fine-tuning)
         'gradient_clip': 1.0,          
         'scheduler': 'cosine_warmup',
         'scheduler_params': {
@@ -166,6 +174,21 @@ def get_hyperparameters(architecture: str, num_gpus: int = 1) -> Dict[str, Any]:
             hyperparams['batch_size'] = per_gpu_batch
             hyperparams['_auto_adjusted_batch'] = True
             hyperparams['_original_batch'] = ARCHITECTURE_HYPERPARAMETERS['vit']['batch_size']
+        else:
+            # Single GPU: use configured batch_size, gradient accumulation handles the rest
+            hyperparams['_auto_adjusted_batch'] = False
+    
+    # Auto-adjust batch_size for EfficientNetV2-S based on effective_batch_size and num_gpus
+    if arch_lower == 'efficientnetv2_s' and 'effective_batch_size' in hyperparams:
+        effective_batch = hyperparams['effective_batch_size']
+        if num_gpus > 1 and hyperparams.get('allow_ddp', False):
+            # Multi-GPU: calculate per-GPU batch size to reach effective_batch_size
+            per_gpu_batch = effective_batch // num_gpus
+            if per_gpu_batch < 1:
+                per_gpu_batch = 1
+            hyperparams['batch_size'] = per_gpu_batch
+            hyperparams['_auto_adjusted_batch'] = True
+            hyperparams['_original_batch'] = ARCHITECTURE_HYPERPARAMETERS['efficientnetv2_s']['batch_size']
         else:
             # Single GPU: use configured batch_size, gradient accumulation handles the rest
             hyperparams['_auto_adjusted_batch'] = False

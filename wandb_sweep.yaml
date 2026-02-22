@@ -10,7 +10,7 @@ parameters:
       - resnet18_modern
       - vgg11
       - vgg11_modern
-      - efficientnetb0
+      - efficientnetv2_s
       - vit
   
   fusion_type:
@@ -34,4 +34,3 @@ command:
   - --flip_mode=${flip_mode}
   - --num_epochs=1000
   - --early_stop_patience=150
-

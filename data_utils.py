@@ -54,6 +54,10 @@ class FlipDataset(Dataset):
         self.mean = mean
         self.std = std
         
+        # Pre-compute mean/std tensors for denormalization (avoid creating on every __getitem__)
+        self.mean_tensor = torch.tensor(self.mean).view(3, 1, 1)
+        self.std_tensor = torch.tensor(self.std).view(3, 1, 1)
+        
         # Augmentation transforms (configurable by image_size)
         if apply_augmentation:
             self.augmentation = transforms.Compose([
@@ -87,10 +91,8 @@ class FlipDataset(Dataset):
         if self.apply_augmentation and self.augmentation is not None:
             # Convert to PIL Image for augmentation
             if isinstance(image, torch.Tensor):
-                # Denormalize using configurable mean/std
-                mean_tensor = torch.tensor(self.mean).view(3, 1, 1)
-                std_tensor = torch.tensor(self.std).view(3, 1, 1)
-                image = image * std_tensor + mean_tensor
+                # Denormalize using pre-computed mean/std tensors
+                image = image * self.std_tensor + self.mean_tensor
                 image = torch.clamp(image, 0, 1)
                 image = transforms.ToPILImage()(image)
             image = self.augmentation(image)
@@ -344,11 +346,10 @@ def get_augmentation_transforms(image_size=64, augmentation_type='basic', mean=N
             RandomErasing(p=0.25, scale=(0.02, 0.33), ratio=(0.3, 3.3)),  # Random Erasing (DeiT paper: p=0.25)
         ])
     elif augmentation_type == 'efficientnet':
-        # EfficientNet paper: AutoAugment (we use RandAugment as modern alternative, NO Mixup/CutMix)
         return transforms.Compose([
             transforms.RandomCrop(image_size, padding=4),
             transforms.RandomHorizontalFlip(p=0.5),
-            RandAugment(num_ops=2, magnitude=9),  # RandAugment (modern alternative to AutoAugment)
+            RandAugment(num_ops=2, magnitude=12),  # Paper: magnitude 5-15 for EfficientNetV2-S
             transforms.ToTensor(),
             transforms.Normalize(mean, std),
         ])

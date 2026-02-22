@@ -17,7 +17,6 @@ from utils.model_factory import create_model
 from utils.dataset_factory import create_dataset
 from utils.utils import count_parameters
 from losses import normal_loss, flip_inverted_loss
-from losses_optimized import flip_all_loss_vectorized
 from hyperparameters import get_hyperparameters, get_optimizer
 from data_utils import mixup_data, cutmix_data, mixup_criterion
 
@@ -110,7 +109,8 @@ class ExtendedExperimentRunner:
                  use_ddp=False, rank=0, world_size=1, ddp_backend='nccl',
                  # Hyperparameters (optional - will be set from get_hyperparameters if None)
                  optimizer=None, weight_decay=None, effective_batch_size=None,
-                 gradient_clip=None, scheduler=None, scheduler_params=None):
+                 gradient_clip=None, scheduler=None, scheduler_params=None,
+                 optimizer_extra_params=None):
         self.num_epochs = num_epochs
         self.batch_size = batch_size
         self.learning_rate = learning_rate
@@ -126,6 +126,8 @@ class ExtendedExperimentRunner:
         self.gradient_clip = gradient_clip
         self.scheduler = scheduler
         self.scheduler_params = scheduler_params if scheduler_params is not None else {}
+        # Store extra optimizer params (for RMSProp alpha/momentum/eps)
+        self.optimizer_extra_params = optimizer_extra_params if optimizer_extra_params is not None else {}
         # Confusion targets for new inverted loss (loaded per-architecture)
         self.confusion_targets = None
         
@@ -167,7 +169,6 @@ class ExtendedExperimentRunner:
                     self.logger.info(f"CUDA: {torch.cuda.get_device_name(rank)} (rank {rank})")
                 else:
                     self.logger.info(f"CUDA: {torch.cuda.get_device_name(0)}")
-                torch.backends.cudnn.benchmark = True
     
     def _is_main_process(self):
         """Check if this is the main process (rank 0 or not using DDP)."""
@@ -340,8 +341,6 @@ class ExtendedExperimentRunner:
                     # Apply Mixup/CutMix only for ViT (advanced augmentation), NOT for EfficientNet
                     use_mixup_cutmix = False
                     if self.augmentation_type == 'advanced' and self.mixup_alpha is not None and self.cutmix_alpha is not None:
-                        # Randomly choose Mixup or CutMix (DeiT paper: Mixup prob=0.8, CutMix prob=1.0)
-                        # Since CutMix prob=1.0, we always apply one of them
                         r = np.random.rand()
                         if r < 0.5:  # 50% chance for Mixup
                             images, labels_a, labels_b, lam = mixup_data(images, labels, alpha=self.mixup_alpha)
@@ -362,76 +361,33 @@ class ExtendedExperimentRunner:
                         loss = mixup_criterion(normal_loss, outputs, mixup_labels_a, mixup_labels_b, mixup_lam)
                     else:
                         loss = normal_loss(outputs, labels)
+                    
+                    # For baseline, all samples are normal — count all for accuracy
+                    normal_labels_for_acc = labels
+                    normal_outputs_for_acc = outputs
+                
                 else:
-                    images, labels, flips = batch[0], batch[1], batch[2]
+
+                    images, labels = batch[0], batch[1]
                     images = images.to(self.device, non_blocking=True)
                     labels = labels.to(self.device, non_blocking=True)
-                    flips = flips.to(self.device, non_blocking=True)
                     
-                    # Apply Mixup/CutMix for advanced augmentation architectures (only on normal samples)
-                    use_mixup_cutmix = False
-                    mixup_lam = None
-                    mixup_labels_a = None
-                    mixup_labels_b = None
-                    mixup_normal_mask = None
+                    # Generate flip values based on mode
+                    if flip_mode == 'all':
+                        flips = torch.randint(0, 2, (images.size(0),), device=self.device).float()
+                    else:  # 'inverted'
+                        flips = torch.rand(images.size(0), device=self.device)
                     
-                    if self.augmentation_type == 'advanced' and self.mixup_alpha is not None and self.cutmix_alpha is not None:
-                        # Only apply to normal samples (flip=0)
-                        normal_mask = (flips == 0)
-                        if normal_mask.sum() > 0:
-                            r = np.random.rand()
-                            if r < 0.5:  # 50% chance for Mixup
-                                images_normal = images[normal_mask].clone()
-                                labels_normal = labels[normal_mask]
-                                images_normal, labels_a, labels_b, lam = mixup_data(images_normal, labels_normal, alpha=self.mixup_alpha)
-                                images[normal_mask] = images_normal
-                                use_mixup_cutmix = True
-                                mixup_lam = lam
-                                mixup_labels_a = labels_a
-                                mixup_labels_b = labels_b
-                                mixup_normal_mask = normal_mask.clone()
-                            else:  # 50% chance for CutMix
-                                images_normal = images[normal_mask].clone()
-                                labels_normal = labels[normal_mask]
-                                images_normal, labels_a, labels_b, lam = cutmix_data(images_normal, labels_normal, alpha=self.cutmix_alpha)
-                                images[normal_mask] = images_normal
-                                use_mixup_cutmix = True
-                                mixup_lam = lam
-                                mixup_labels_a = labels_a
-                                mixup_labels_b = labels_b
-                                mixup_normal_mask = normal_mask.clone()
-                    
-                    # Forward pass
+                    # Forward pass with flip values
                     outputs = model(images, flips)
-
-                    # Compute loss based on flip value
-                    normal_mask = (flips == 0)
-                    flip_mask = (flips == 1)
-                    losses = []
                     
-                    if normal_mask.sum() > 0:
-                        if use_mixup_cutmix and mixup_normal_mask is not None and (normal_mask == mixup_normal_mask).all():
-                            # All normal samples used Mixup/CutMix
-                            losses.append(mixup_criterion(normal_loss, outputs[normal_mask], mixup_labels_a, mixup_labels_b, mixup_lam))
-                        else:
-                            losses.append(normal_loss(outputs[normal_mask], labels[normal_mask]))
+                    # Unified loss: flip_inverted_loss handles both binary and continuous flips
+                    # flip=0 → standard cross-entropy, flip=1 → uniform over wrong classes
+                    loss = flip_inverted_loss(outputs, labels, flips)
                     
-                    if flip_mask.sum() > 0:
-                        if flip_mode == 'all':
-                            losses.append(flip_all_loss_vectorized(outputs[flip_mask], labels[flip_mask]))
-                        elif flip_mode == 'inverted':
-                            # Use continuous flip loss with flip values
-                            # Convert flips to float for continuous values
-                            flip_values = flips[flip_mask].float()
-                            losses.append(
-                                flip_inverted_loss(
-                                    outputs[flip_mask],
-                                    labels[flip_mask],
-                                    flip_values,
-                                )
-                            )
-                    
-                    loss = sum(losses) / len(losses) if losses else torch.tensor(0.0, device=self.device)
+                    # Report accuracy on all samples
+                    normal_labels_for_acc = labels
+                    normal_outputs_for_acc = outputs
             
             # Scale loss by accumulation steps for gradient accumulation
             loss = loss / accumulation_steps
@@ -449,7 +405,6 @@ class ExtendedExperimentRunner:
                 gradient_clip = exp_config.get('gradient_clip', None)
                 if gradient_clip is not None:
                     if self.use_amp:
-                        # Unscale gradients before clipping (for AMP)
                         self.scaler.unscale_(optimizer)
                         torch.nn.utils.clip_grad_norm_(model.parameters(), gradient_clip)
                         self.scaler.step(optimizer)
@@ -466,7 +421,7 @@ class ExtendedExperimentRunner:
                 optimizer.zero_grad()
                 optimizer_step_occurred = True
             
-            # Log progress periodically (on optimizer steps for gradient accumulation, or every log_interval)
+            # Log progress periodically
             should_log = (
                 optimizer_step_occurred and (batch_idx + 1) % log_interval == 0
             ) or (
@@ -474,7 +429,7 @@ class ExtendedExperimentRunner:
             ) or (
                 (batch_idx + 1) == total_batches
             ) or (
-                accumulation_steps > 1 and (batch_idx + 1) == accumulation_steps  # Log first optimizer step
+                accumulation_steps > 1 and (batch_idx + 1) == accumulation_steps
             )
             
             if should_log:
@@ -500,11 +455,13 @@ class ExtendedExperimentRunner:
             
             # Unscale loss for logging (multiply by accumulation_steps)
             total_loss += loss * accumulation_steps
-            _, predicted = torch.max(outputs.data, 1)
-            _, top5_pred = torch.topk(outputs.data, min(5, outputs.size(1)), dim=1)
-            total += labels.size(0)
-            correct += (predicted == labels).sum().item()
-            correct_top5 += (top5_pred == labels.unsqueeze(1)).any(dim=1).sum().item()
+            # Compute accuracy only on normal samples (flip=0 for 'all' mode, all for baseline/inverted)
+            if normal_outputs_for_acc.size(0) > 0:
+                _, predicted = torch.max(normal_outputs_for_acc.data, 1)
+                _, top5_pred = torch.topk(normal_outputs_for_acc.data, min(5, normal_outputs_for_acc.size(1)), dim=1)
+                total += normal_labels_for_acc.size(0)
+                correct += (predicted == normal_labels_for_acc).sum().item()
+                correct_top5 += (top5_pred == normal_labels_for_acc.unsqueeze(1)).any(dim=1).sum().item()
         
         # Handle remaining gradients if batch doesn't divide evenly
         if (batch_idx + 1) % accumulation_steps != 0:
@@ -531,36 +488,18 @@ class ExtendedExperimentRunner:
         with torch.no_grad():
             for batch in data_loader:
                 with torch.amp.autocast('cuda', enabled=self.use_amp):
+                    images, labels = batch[0], batch[1]
+                    images = images.to(self.device, non_blocking=True)
+                    labels = labels.to(self.device, non_blocking=True)
+                    
                     if fusion_type == 'baseline':
-                        images, labels = batch[0], batch[1]
-                        images = images.to(self.device, non_blocking=True)
-                        labels = labels.to(self.device, non_blocking=True)
                         outputs = model(images)
-                        loss = normal_loss(outputs, labels)
                     else:
-                        # Handle both cases: batch with flip (train) or without (val/test)
-                        if len(batch) == 3:
-                            images, labels, flips = batch[0], batch[1], batch[2]
-                        else:
-                            # Val/test loaders don't have flip, create dummy zeros (all normal samples)
-                            images, labels = batch[0], batch[1]
-                            flips = torch.zeros(images.size(0), dtype=torch.long, device=images.device)
-                        
-                        images = images.to(self.device, non_blocking=True)
-                        labels = labels.to(self.device, non_blocking=True)
-                        flips = flips.to(self.device, non_blocking=True)
-                        
-                        if fusion_type in ['early', 'late']:
-                            outputs = model(images, flips)
-                        else:
-                            outputs = model(images)
-                        
-                        # For evaluation, only use normal samples (flip=0)
-                        normal_mask = (flips == 0)
-                        if normal_mask.sum() > 0:
-                            loss = normal_loss(outputs[normal_mask], labels[normal_mask])
-                        else:
-                            loss = torch.tensor(0.0, device=self.device)
+                        # Evaluation always uses flip=0.0 (normal classification)
+                        flips = torch.zeros(images.size(0), dtype=torch.float32, device=self.device)
+                        outputs = model(images, flips)
+                    
+                    loss = normal_loss(outputs, labels)
                 
                 total_loss += loss.item()
                 _, predicted = torch.max(outputs.data, 1)
@@ -664,11 +603,14 @@ class ExtendedExperimentRunner:
         # Create data loaders
         self.logger.info("Creating data loaders...")
         try:
+
+            # Never use FlipDataset — both 'all' and 'inverted' modes generate flip values per batch
+            use_flip = False
             train_loader, val_loader, test_loader = create_dataset(
                 dataset_name=exp_config['dataset'],
                 batch_size=paper_batch_size,  # Use paper-matching batch size
                 use_augmentation=exp_config['use_augmentation'],
-                use_flip=(exp_config['fusion_type'] != 'baseline'),
+                use_flip=use_flip,
                 use_ddp=self.use_ddp,
                 rank=self.rank,
                 world_size=self.world_size,
@@ -736,6 +678,8 @@ class ExtendedExperimentRunner:
             'learning_rate': self.learning_rate,
             'weight_decay': self.weight_decay,
         }
+        # Forward extra optimizer params (e.g. RMSProp alpha/momentum/eps)
+        hyperparams_dict.update(self.optimizer_extra_params)
         optimizer = get_optimizer(model, hyperparams_dict)
 
         # Create scheduler using instance variables
@@ -753,12 +697,33 @@ class ExtendedExperimentRunner:
 
             def lr_lambda(epoch):
                 if epoch < warmup_epochs:
-                    return float(epoch + 1) / float(max(1, warmup_epochs))
+                    # Linear warmup from 0 to base LR
+                    return float(epoch) / float(max(1, warmup_epochs))
                 progress = float(epoch - warmup_epochs) / float(max(1, self.num_epochs - warmup_epochs))
                 return 0.5 * (1.0 + math.cos(math.pi * progress))
             scheduler = optim.lr_scheduler.LambdaLR(optimizer, lr_lambda=lr_lambda)
         elif scheduler_name == 'rmsprop_decay':
             scheduler = optim.lr_scheduler.ExponentialLR(optimizer, gamma=0.97)
+        elif scheduler_name == 'rmsprop_warmup_decay':
+            # Paper: EfficientNetV2 (Tan & Le 2021, Section 5.1)
+            # Learning rate is first warmed up from 0 to 0.256, then decayed by 0.97 every 2.4 epochs
+            import math
+            warmup_epochs = scheduler_params.get('warmup_epochs', 5)
+            decay_epochs = scheduler_params.get('decay_epochs', 2.4)  # Decay every 2.4 epochs
+            gamma = scheduler_params.get('gamma', 0.97)  # Decay factor
+            
+            def lr_lambda(epoch):
+                if epoch < warmup_epochs:
+                    # Linear warmup from 0 to base LR
+                    return float(epoch) / float(max(1, warmup_epochs))
+                else:
+                    # Decay by gamma every decay_epochs
+                    # Calculate how many decay steps have occurred
+                    epochs_since_warmup = epoch - warmup_epochs
+                    num_decay_steps = int(epochs_since_warmup / decay_epochs)
+                    return gamma ** num_decay_steps
+            
+            scheduler = optim.lr_scheduler.LambdaLR(optimizer, lr_lambda=lr_lambda)
         elif scheduler_name == 'plateau':
             # Paper: VGG (Simonyan & Zisserman 2015) - Adaptive LR reduction
             mode = scheduler_params.get('mode', 'max')
@@ -780,6 +745,11 @@ class ExtendedExperimentRunner:
             scheduler_desc = f"CosineWarmup (warmup={warmup} epochs)"
         elif scheduler_name == 'rmsprop_decay':
             scheduler_desc = "ExponentialLR (gamma=0.97)"
+        elif scheduler_name == 'rmsprop_warmup_decay':
+            warmup = scheduler_params.get('warmup_epochs', 5)
+            decay_epochs = scheduler_params.get('decay_epochs', 2.4)
+            gamma = scheduler_params.get('gamma', 0.97)
+            scheduler_desc = f"RMSpropWarmupDecay (warmup={warmup} epochs, decay every {decay_epochs} epochs by {gamma})"
         elif scheduler_name == 'plateau':
             mode = scheduler_params.get('mode', 'max')
             factor = scheduler_params.get('factor', 0.1)
