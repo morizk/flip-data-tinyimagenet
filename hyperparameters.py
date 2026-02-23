@@ -107,7 +107,7 @@ ARCHITECTURE_HYPERPARAMETERS: Dict[str, Dict[str, Any]] = {
 
     # EfficientNetV2-S – Tan & Le 2021 (EfficientNetV2: Smaller Models and Faster Training)
     'efficientnetv2_s': {
-        'batch_size': 4096,  # Per-GPU batch size (will auto-adjust for multi-GPU)
+        'batch_size': 2048,  # Per-GPU batch size (will auto-adjust for multi-GPU)
         'effective_batch_size': 4096,  # Paper: total batch size 4096
         'learning_rate': 0.256,  # Paper: peak LR after warmup (warmup from 0 to 0.256)
         'optimizer': 'rmsprop',
