@@ -657,7 +657,9 @@ class ExtendedExperimentRunner:
                 
                 if not skip_compile:
                     try:
-                        model = torch.compile(model, mode='reduce-overhead')
+                        # Use 'default' mode — 'reduce-overhead' uses CUDA Graphs which
+                        # conflicts with timm's BatchNormAct2d (e.g. EfficientNetV2-S)
+                        model = torch.compile(model)
                         if self._is_main_process():
                             self.logger.info("✓ Model compiled with torch.compile (PyTorch 2.0+)")
                     except Exception as compile_error:
