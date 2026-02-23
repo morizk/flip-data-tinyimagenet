@@ -106,22 +106,24 @@ ARCHITECTURE_HYPERPARAMETERS: Dict[str, Dict[str, Any]] = {
     },
 
     # EfficientNetV2-S – Tan & Le 2021 (EfficientNetV2: Smaller Models and Faster Training)
+    # Adapted for TinyImageNet (100K images vs ImageNet 1.28M) using linear LR scaling
+    # (Goyal et al. 2017): LR scales proportionally with batch size.
+    # Paper recipe: batch=4096, LR=0.256 → base_lr = 0.256 × (256/4096) = 0.016
     'efficientnetv2_s': {
-        'batch_size': 2048,  # Per-GPU batch size (will auto-adjust for multi-GPU)
-        'effective_batch_size': 4096,  # Paper: total batch size 4096
-        'learning_rate': 0.256,  # Paper: peak LR after warmup (warmup from 0 to 0.256)
+        'batch_size': 256,           # Scaled for TinyImageNet (paper: 4096 on 1.28M images)
+        'learning_rate': 0.016,      # Linear scaling: 0.256 × (256/4096)
         'optimizer': 'rmsprop',
-        'alpha': 0.9,  # Paper: RMSProp decay=0.9
-        'momentum': 0.9,  # Paper: RMSProp momentum=0.9
-        'eps': 0.001,  # RMSProp epsilon
-        'weight_decay': 1e-5,  # Paper: weight decay 1e-5
+        'alpha': 0.9,                # Paper: RMSProp decay=0.9
+        'momentum': 0.9,             # Paper: RMSProp momentum=0.9
+        'eps': 0.001,                # RMSProp epsilon
+        'weight_decay': 1e-5,        # Paper: weight decay 1e-5
         'scheduler': 'rmsprop_warmup_decay',  # Paper: warmup then decay by 0.97 every 2.4 epochs
         'scheduler_params': {
-            'warmup_epochs': 5,  # Warmup duration (will be calculated based on total epochs)
-            'decay_epochs': 2.4,  # Paper: decay every 2.4 epochs
-            'gamma': 0.97,  # Paper: decay factor 0.97
+            'warmup_epochs': 5,      # Paper: warmup duration
+            'decay_epochs': 2.4,     # Paper: decay every 2.4 epochs
+            'gamma': 0.97,           # Paper: decay factor 0.97
         },
-        'allow_ddp': True,  # Allow multi-GPU training (like ViT)
+        'allow_ddp': False,          # Single GPU sufficient without large batch
         'augmentation_type': 'efficientnet',  # Paper: RandAugment (Cubuk et al., 2020)
     },
 
