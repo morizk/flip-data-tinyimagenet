@@ -2,64 +2,18 @@
 Extended model architectures for TinyImageNet (64×64, 200 classes) with flip feature support.
 Includes: ResNet-18/34, VGG-11/16, EfficientNetV2-S, ViT
 
-Early fusion uses FiLM (Feature-wise Linear Modulation) conditioning:
-  The flip value generates per-channel scale (γ) and shift (β) that modulate
-  feature maps at each stage. Initialized to identity (γ=1, β=0) so the model
-  starts as if no flip conditioning exists. 
+Early fusion for CNNs: flip value broadcast as a constant 4th input channel.
+  The flip scalar is expanded to (B, 1, H, W) and concatenated with the RGB image,
+  giving the first conv layer a 4-channel input. The network learns how to use
+  the flip signal through normal gradient flow — no intermediate feature modulation.
+
+Early fusion for ViT: flip token inserted between CLS and patch tokens.
 """
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
 import timm
 from typing import Optional
-
-
-# ============================================================================
-# FiLM (Feature-wise Linear Modulation) Conditioning
-# ============================================================================
-
-class FiLMGenerator(nn.Module):
-    """Generates per-channel scale (γ) and shift (β) from a scalar flip value.
-    
-    FiLM (Perez et al., 2018) conditions feature maps on an auxiliary signal.
-    Initialized to identity (γ=1, β=0) so the model starts as if no conditioning exists.
-    """
-    def __init__(self, num_channels, hidden_dim=64):
-        super().__init__()
-        self.net = nn.Sequential(
-            nn.Linear(1, hidden_dim),
-            nn.ReLU(inplace=True),
-            nn.Linear(hidden_dim, num_channels * 2),  # γ and β concatenated
-        )
-        # Initialize to identity: γ=1, β=0
-        nn.init.zeros_(self.net[-1].weight)
-        nn.init.constant_(self.net[-1].bias[:num_channels], 1.0)   # γ = 1
-        nn.init.zeros_(self.net[-1].bias[num_channels:])            # β = 0
-
-    def forward(self, flip_value):
-        """
-        Args:
-            flip_value: (batch,) scalar flip values
-        Returns:
-            gamma: (batch, num_channels) per-channel scale
-            beta: (batch, num_channels) per-channel shift
-        """
-        params = self.net(flip_value.unsqueeze(-1).float())  # (batch, 2*C)
-        gamma, beta = params.chunk(2, dim=-1)  # each (batch, C)
-        return gamma, beta
-
-
-def film_modulate(features, gamma, beta):
-    """Apply FiLM modulation: output = γ * features + β
-    
-    Args:
-        features: (batch, C, H, W) feature maps
-        gamma: (batch, C) per-channel scale
-        beta: (batch, C) per-channel shift
-    Returns:
-        Modulated features: (batch, C, H, W)
-    """
-    return gamma.unsqueeze(-1).unsqueeze(-1) * features + beta.unsqueeze(-1).unsqueeze(-1)
 
 
 # ============================================================================
@@ -225,48 +179,24 @@ class ResNet18_Baseline(ResNet):
         return self.fc(features)
 
 
-# ResNet-18 Early Fusion (FiLM conditioning)
+# ResNet-18 Early Fusion (4th input channel)
 class ResNet18_FlipEarly(ResNet):
-    """ResNet-18 with early fusion using FiLM conditioning.
+    """ResNet-18 with early fusion: flip value as a constant 4th input channel.
     
-    The flip value modulates feature maps at each residual stage via learned
-    per-channel scale (γ) and shift (β). Backbone stays standard 3-channel.
+    The flip scalar is broadcast to a (B, 1, H, W) channel and concatenated
+    with the RGB image before the first conv layer. Minimal parameter overhead
+    (only the extra input channel weights in conv1).
     """
     def __init__(self, num_classes=200, **kwargs):
         super(ResNet18_FlipEarly, self).__init__(
-            BasicBlock, [2, 2, 2, 2], num_classes=num_classes, in_channels=3
+            BasicBlock, [2, 2, 2, 2], num_classes=num_classes, in_channels=4
         )
-        # FiLM generators for each residual stage (64, 128, 256, 512 channels)
-        self.film1 = FiLMGenerator(64)
-        self.film2 = FiLMGenerator(128)
-        self.film3 = FiLMGenerator(256)
-        self.film4 = FiLMGenerator(512)
     
     def forward(self, x, flip):
-        x = self.conv1(x)
-        x = self.bn1(x)
-        x = self.relu(x)
-        x = self.maxpool(x)
-        
-        x = self.layer1(x)
-        gamma, beta = self.film1(flip)
-        x = film_modulate(x, gamma, beta)
-        
-        x = self.layer2(x)
-        gamma, beta = self.film2(flip)
-        x = film_modulate(x, gamma, beta)
-        
-        x = self.layer3(x)
-        gamma, beta = self.film3(flip)
-        x = film_modulate(x, gamma, beta)
-        
-        x = self.layer4(x)
-        gamma, beta = self.film4(flip)
-        x = film_modulate(x, gamma, beta)
-        
-        x = self.avgpool(x)
-        x = torch.flatten(x, 1)
-        return self.fc(x)
+        flip_channel = flip.view(-1, 1, 1, 1).expand(-1, 1, x.shape[2], x.shape[3])
+        x = torch.cat([x, flip_channel], dim=1)  # (B, 4, H, W)
+        features = self._forward_impl(x)
+        return self.fc(features)
 
 
 # ResNet-18 Late Fusion
@@ -299,43 +229,19 @@ class ResNet34_Baseline(ResNet):
         return self.fc(features)
 
 
-# ResNet-34 Early Fusion (FiLM conditioning)
+# ResNet-34 Early Fusion (4th input channel)
 class ResNet34_FlipEarly(ResNet):
-    """ResNet-34 with early fusion using FiLM conditioning."""
+    """ResNet-34 with early fusion: flip value as a constant 4th input channel."""
     def __init__(self, num_classes=200, **kwargs):
         super(ResNet34_FlipEarly, self).__init__(
-            BasicBlock, [3, 4, 6, 3], num_classes=num_classes, in_channels=3
+            BasicBlock, [3, 4, 6, 3], num_classes=num_classes, in_channels=4
         )
-        self.film1 = FiLMGenerator(64)
-        self.film2 = FiLMGenerator(128)
-        self.film3 = FiLMGenerator(256)
-        self.film4 = FiLMGenerator(512)
     
     def forward(self, x, flip):
-        x = self.conv1(x)
-        x = self.bn1(x)
-        x = self.relu(x)
-        x = self.maxpool(x)
-        
-        x = self.layer1(x)
-        gamma, beta = self.film1(flip)
-        x = film_modulate(x, gamma, beta)
-        
-        x = self.layer2(x)
-        gamma, beta = self.film2(flip)
-        x = film_modulate(x, gamma, beta)
-        
-        x = self.layer3(x)
-        gamma, beta = self.film3(flip)
-        x = film_modulate(x, gamma, beta)
-        
-        x = self.layer4(x)
-        gamma, beta = self.film4(flip)
-        x = film_modulate(x, gamma, beta)
-        
-        x = self.avgpool(x)
-        x = torch.flatten(x, 1)
-        return self.fc(x)
+        flip_channel = flip.view(-1, 1, 1, 1).expand(-1, 1, x.shape[2], x.shape[3])
+        x = torch.cat([x, flip_channel], dim=1)  # (B, 4, H, W)
+        features = self._forward_impl(x)
+        return self.fc(features)
 
 
 # ResNet-34 Late Fusion
@@ -416,36 +322,6 @@ def make_layers(cfg, batch_norm=False, in_channels=3):
     return nn.Sequential(*layers)
 
 
-def make_layers_blocks(cfg, batch_norm=False, in_channels=3):
-    """Make VGG layers split into blocks at MaxPool boundaries (for FiLM conditioning).
-    
-    Returns:
-        blocks: nn.ModuleList of Sequential blocks (one per pooling stage)
-        block_channels: list of output channel counts for each block
-    """
-    blocks = []
-    block_channels = []
-    current_block = []
-    ch = in_channels
-    for v in cfg:
-        if v == 'M':
-            current_block.append(nn.MaxPool2d(kernel_size=2, stride=2))
-            blocks.append(nn.Sequential(*current_block))
-            block_channels.append(ch)
-            current_block = []
-        else:
-            conv2d = nn.Conv2d(ch, v, kernel_size=3, padding=1)
-            if batch_norm:
-                current_block += [conv2d, nn.BatchNorm2d(v), nn.ReLU(inplace=True)]
-            else:
-                current_block += [conv2d, nn.ReLU(inplace=True)]
-            ch = v
-    if current_block:
-        blocks.append(nn.Sequential(*current_block))
-        block_channels.append(ch)
-    return nn.ModuleList(blocks), block_channels
-
-
 # VGG-11 configuration
 cfgs = {
     'A': [64, 'M', 128, 'M', 256, 256, 'M', 512, 512, 'M', 512, 512, 'M'],
@@ -463,51 +339,17 @@ class VGG11_Baseline(VGG):
         super(VGG11_Baseline, self).__init__(features, num_classes=num_classes, in_channels=3)
 
 
-# VGG-11 Early Fusion (FiLM conditioning)
-class VGG11_FlipEarly(nn.Module):
-    """VGG-11 with early fusion using FiLM conditioning.
-    
-    FiLM modulates feature maps after each conv block (at MaxPool boundaries).
-    Backbone stays standard 3-channel input.
-    """
+# VGG-11 Early Fusion (4th input channel)
+class VGG11_FlipEarly(VGG):
+    """VGG-11 with early fusion: flip value as a constant 4th input channel."""
     def __init__(self, num_classes=200, **kwargs):
-        super(VGG11_FlipEarly, self).__init__()
-        self.feature_blocks, block_channels = make_layers_blocks(cfgs['A'], batch_norm=True, in_channels=3)
-        self.avgpool = nn.AdaptiveAvgPool2d((1, 1))
-        self.classifier = nn.Sequential(
-            nn.Linear(512, 4096),
-            nn.ReLU(True),
-            nn.Dropout(),
-            nn.Linear(4096, 4096),
-            nn.ReLU(True),
-            nn.Dropout(),
-            nn.Linear(4096, num_classes),
-        )
-        # Initialize VGG weights BEFORE creating FiLM generators
-        self._initialize_vgg_weights()
-        # FiLM generators (with their own identity initialization)
-        self.film_generators = nn.ModuleList([FiLMGenerator(ch) for ch in block_channels])
-    
-    def _initialize_vgg_weights(self):
-        """Initialize VGG feature and classifier weights (not FiLM generators)."""
-        for module in [self.feature_blocks, self.classifier]:
-            for m in module.modules():
-                if isinstance(m, nn.Conv2d):
-                    nn.init.kaiming_normal_(m.weight, mode='fan_out', nonlinearity='relu')
-                    if m.bias is not None:
-                        nn.init.constant_(m.bias, 0)
-                elif isinstance(m, nn.BatchNorm2d):
-                    nn.init.constant_(m.weight, 1)
-                    nn.init.constant_(m.bias, 0)
-                elif isinstance(m, nn.Linear):
-                    nn.init.normal_(m.weight, 0, 0.01)
-                    nn.init.constant_(m.bias, 0)
+        features = make_layers(cfgs['A'], batch_norm=True, in_channels=4)
+        super(VGG11_FlipEarly, self).__init__(features, num_classes=num_classes, in_channels=4)
     
     def forward(self, x, flip):
-        for block, film in zip(self.feature_blocks, self.film_generators):
-            x = block(x)
-            gamma, beta = film(flip)
-            x = film_modulate(x, gamma, beta)
+        flip_channel = flip.view(-1, 1, 1, 1).expand(-1, 1, x.shape[2], x.shape[3])
+        x = torch.cat([x, flip_channel], dim=1)  # (B, 4, H, W)
+        x = self.features(x)
         x = self.avgpool(x)
         x = torch.flatten(x, 1)
         x = self.classifier(x)
@@ -549,45 +391,17 @@ class VGG16_Baseline(VGG):
         super(VGG16_Baseline, self).__init__(features, num_classes=num_classes, in_channels=3)
 
 
-# VGG-16 Early Fusion (FiLM conditioning)
-class VGG16_FlipEarly(nn.Module):
-    """VGG-16 with early fusion using FiLM conditioning."""
+# VGG-16 Early Fusion (4th input channel)
+class VGG16_FlipEarly(VGG):
+    """VGG-16 with early fusion: flip value as a constant 4th input channel."""
     def __init__(self, num_classes=200, **kwargs):
-        super(VGG16_FlipEarly, self).__init__()
-        self.feature_blocks, block_channels = make_layers_blocks(cfgs['D'], batch_norm=True, in_channels=3)
-        self.avgpool = nn.AdaptiveAvgPool2d((1, 1))
-        self.classifier = nn.Sequential(
-            nn.Linear(512, 4096),
-            nn.ReLU(True),
-            nn.Dropout(),
-            nn.Linear(4096, 4096),
-            nn.ReLU(True),
-            nn.Dropout(),
-            nn.Linear(4096, num_classes),
-        )
-        self._initialize_vgg_weights()
-        self.film_generators = nn.ModuleList([FiLMGenerator(ch) for ch in block_channels])
-    
-    def _initialize_vgg_weights(self):
-        """Initialize VGG feature and classifier weights (not FiLM generators)."""
-        for module in [self.feature_blocks, self.classifier]:
-            for m in module.modules():
-                if isinstance(m, nn.Conv2d):
-                    nn.init.kaiming_normal_(m.weight, mode='fan_out', nonlinearity='relu')
-                    if m.bias is not None:
-                        nn.init.constant_(m.bias, 0)
-                elif isinstance(m, nn.BatchNorm2d):
-                    nn.init.constant_(m.weight, 1)
-                    nn.init.constant_(m.bias, 0)
-                elif isinstance(m, nn.Linear):
-                    nn.init.normal_(m.weight, 0, 0.01)
-                    nn.init.constant_(m.bias, 0)
+        features = make_layers(cfgs['D'], batch_norm=True, in_channels=4)
+        super(VGG16_FlipEarly, self).__init__(features, num_classes=num_classes, in_channels=4)
     
     def forward(self, x, flip):
-        for block, film in zip(self.feature_blocks, self.film_generators):
-            x = block(x)
-            gamma, beta = film(flip)
-            x = film_modulate(x, gamma, beta)
+        flip_channel = flip.view(-1, 1, 1, 1).expand(-1, 1, x.shape[2], x.shape[3])
+        x = torch.cat([x, flip_channel], dim=1)  # (B, 4, H, W)
+        x = self.features(x)
         x = self.avgpool(x)
         x = torch.flatten(x, 1)
         x = self.classifier(x)
@@ -644,58 +458,16 @@ class EfficientNetV2_S_Baseline(nn.Module):
 
 
 class EfficientNetV2_S_FlipEarly(nn.Module):
-    """EfficientNetV2-S with early fusion using FiLM conditioning.
-    
-    FiLM modulates feature maps after each EfficientNet stage.
-    Backbone stays standard 3-channel input.
-    """
+    """EfficientNetV2-S with early fusion: flip value as a constant 4th input channel."""
     def __init__(self, num_classes=200, **kwargs):
         super(EfficientNetV2_S_FlipEarly, self).__init__()
         self.model = timm.create_model('efficientnetv2_s', pretrained=False, num_classes=num_classes,
-                                       in_chans=3)
-        # Probe output channels for each stage
-        stage_channels = self._probe_stage_channels()
-        # Create FiLM generators for each stage
-        self.film_generators = nn.ModuleList([FiLMGenerator(ch) for ch in stage_channels])
-    
-    def _probe_stage_channels(self):
-        """Get output channels for each stage by running a dummy forward pass."""
-        channels = []
-        was_training = self.model.training
-        self.model.eval()
-        with torch.no_grad():
-            x = torch.zeros(1, 3, 64, 64)
-            x = self.model.conv_stem(x)
-            x = self.model.bn1(x)  # BatchNormAct2d includes activation
-            for stage in self.model.blocks:
-                x = stage(x)
-                channels.append(x.shape[1])
-        if was_training:
-            self.model.train()
-        return channels
+                                       in_chans=4)
     
     def forward(self, x, flip):
-        # Stem (bn1 is BatchNormAct2d — includes activation)
-        x = self.model.conv_stem(x)
-        x = self.model.bn1(x)
-        
-        # Blocks with FiLM conditioning after each stage
-        for stage, film in zip(self.model.blocks, self.film_generators):
-            x = stage(x)
-            gamma, beta = film(flip)
-            x = film_modulate(x, gamma, beta)
-        
-        # Head (bn2 is BatchNormAct2d — includes activation)
-        x = self.model.conv_head(x)
-        x = self.model.bn2(x)
-        
-        # Pool and classify
-        x = self.model.global_pool(x)
-        x = x.view(x.size(0), -1)
-        if self.model.drop_rate > 0.:
-            x = F.dropout(x, p=self.model.drop_rate, training=self.training)
-        x = self.model.classifier(x)
-        return x
+        flip_channel = flip.view(-1, 1, 1, 1).expand(-1, 1, x.shape[2], x.shape[3])
+        x = torch.cat([x, flip_channel], dim=1)  # (B, 4, H, W)
+        return self.model(x)
 
 
 class EfficientNetV2_S_FlipLate(nn.Module):

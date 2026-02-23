@@ -385,9 +385,20 @@ class ExtendedExperimentRunner:
                     # flip=0 → standard cross-entropy, flip=1 → uniform over wrong classes
                     loss = flip_inverted_loss(outputs, labels, flips)
                     
-                    # Report accuracy on all samples
-                    normal_labels_for_acc = labels
-                    normal_outputs_for_acc = outputs
+                    # For 'all' mode, only count flip=0 samples for accuracy
+                    # (flip=1 samples are intentionally predicting wrong classes)
+                    if flip_mode == 'all':
+                        normal_mask = (flips == 0)
+                        if normal_mask.sum() > 0:
+                            normal_labels_for_acc = labels[normal_mask]
+                            normal_outputs_for_acc = outputs[normal_mask]
+                        else:
+                            normal_labels_for_acc = labels[:0]
+                            normal_outputs_for_acc = outputs[:0]
+                    else:
+                        # For 'inverted' mode, all samples have continuous flip values
+                        normal_labels_for_acc = labels
+                        normal_outputs_for_acc = outputs
             
             # Scale loss by accumulation steps for gradient accumulation
             loss = loss / accumulation_steps
