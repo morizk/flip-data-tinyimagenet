@@ -376,7 +376,12 @@ class ExtendedExperimentRunner:
                     if flip_mode == 'all':
                         flips = torch.randint(0, 2, (images.size(0),), device=self.device).float()
                     else:  # 'inverted'
-                        flips = torch.rand(images.size(0), device=self.device)
+                        # Beta(0.5, 0.5) gives a U-shaped distribution concentrating
+                        # samples near 0 and 1, providing strong classification signal
+                        # (flip≈0) and strong flip signal (flip≈1) while still covering
+                        # the full [0,1] range for continuous interpolation.
+                        beta_dist = torch.distributions.Beta(0.5, 0.5)
+                        flips = beta_dist.sample((images.size(0),)).to(self.device)
                     
                     # Forward pass with flip values
                     outputs = model(images, flips)
