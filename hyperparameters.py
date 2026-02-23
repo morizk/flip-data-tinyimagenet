@@ -110,8 +110,8 @@ ARCHITECTURE_HYPERPARAMETERS: Dict[str, Dict[str, Any]] = {
     # (Goyal et al. 2017): LR scales proportionally with batch size.
     # Paper recipe: batch=4096, LR=0.256 → base_lr = 0.256 × (256/4096) = 0.016
     'efficientnetv2_s': {
-        'batch_size': 256,           # Scaled for TinyImageNet (paper: 4096 on 1.28M images)
-        'learning_rate': 0.016,      # Linear scaling: 0.256 × (256/4096)
+        'batch_size': 512,           # Scaled for TinyImageNet (paper: 4096 on 1.28M images)
+        'learning_rate': 0.032,      # Linear scaling: 0.256 × (512/4096)
         'optimizer': 'rmsprop',
         'alpha': 0.9,                # Paper: RMSProp decay=0.9
         'momentum': 0.9,             # Paper: RMSProp momentum=0.9
